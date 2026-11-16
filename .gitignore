@@ -24,3 +24,5 @@ public/releases
 /rutor_host.txt
 /build/
 .codex
+
+db/*.db
