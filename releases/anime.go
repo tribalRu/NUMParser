@@ -1,6 +1,7 @@
 package releases
 
 import (
+	"NUMParser/config"
 	"NUMParser/db"
 	"NUMParser/db/models"
 	"NUMParser/utils"
@@ -27,7 +28,14 @@ func GetNewAnime() {
 
 	list = utils.UniqueTorrList(list)
 
-	ents := FillTMDB("Anime", false, list, 1000)
+	cfg := config.GetReleasesConfig()
+	limit := 3000
+	if cfg.AnimeSort == "tracker" {
+		limit = 1000
+	}
+
+	ents := FillTMDB("Anime", false, list, limit)
+	ents = SortAndFilterTV(ents, cfg.AnimeSort, cfg.AnimeMaxAgeMonths, 1000)
 
 	log.Println("Found torrents:", len(ents))
 	log.Println("All torrents:", len(list))

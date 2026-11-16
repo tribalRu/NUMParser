@@ -6,7 +6,6 @@ import (
 	"math/rand"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 type Tasker struct {
@@ -15,7 +14,8 @@ type Tasker struct {
 	shuffle    bool
 	disableLog bool
 	isStop     atomic.Bool
-	wa         sync.WaitGroup
+	done       chan struct{}
+	closeOnce  sync.Once
 	mu         sync.Mutex
 }
 
@@ -25,17 +25,23 @@ type worker struct {
 }
 
 func New(threads int, shuffle bool) *Tasker {
-	t := new(Tasker)
-	t.threads = threads
+	t := &Tasker{
+		threads: threads,
+		shuffle: shuffle,
+		done:    make(chan struct{}),
+	}
 	if t.threads < 1 {
 		t.threads = 1
 	}
-	t.shuffle = shuffle
 	return t
 }
 
 func (t *Tasker) DisableLog() {
 	t.disableLog = true
+}
+
+func (t *Tasker) Stop() {
+	t.isStop.Store(true)
 }
 
 func (t *Tasker) Add(fn func(interface{}) bool, data interface{}) {
@@ -44,32 +50,37 @@ func (t *Tasker) Add(fn func(interface{}) bool, data interface{}) {
 		Func: fn,
 		Data: data,
 	})
-	t.wa.Add(1)
 	t.mu.Unlock()
 }
 
 func (t *Tasker) Run() {
+	defer t.closeOnce.Do(func() {
+		close(t.done)
+	})
+
+	if len(t.tasks) == 0 {
+		return
+	}
+
 	if t.shuffle {
-		rand.Seed(time.Now().UnixNano())
 		rand.Shuffle(len(t.tasks), func(i, j int) { t.tasks[i], t.tasks[j] = t.tasks[j], t.tasks[i] })
 	}
+
 	utils.PForLim(t.tasks, t.threads, func(i int, wrk worker) bool {
-		stopped := t.isStop.Load()
-		if !t.disableLog && !stopped {
+		if t.isStop.Load() {
+			return false
+		}
+		if !t.disableLog {
 			log.Println("Task", i+1, "/", len(t.tasks))
 		}
-		if !stopped {
-			if !wrk.Func(wrk.Data) {
-				t.isStop.Store(true)
-			}
+		if !wrk.Func(wrk.Data) {
+			t.isStop.Store(true)
+			return false
 		}
-		t.wa.Done()
-		return true
+		return !t.isStop.Load()
 	})
 }
 
 func (t *Tasker) Wait() {
-	if len(t.tasks) > 0 {
-		t.wa.Wait()
-	}
+	<-t.done
 }

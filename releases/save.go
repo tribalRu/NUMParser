@@ -85,16 +85,37 @@ func save(fname string, ents []*models.Entity) {
 }
 
 func zip(rid *ReleasesID, fname string) error {
-	ff, err := os.Create(fname)
+	tempPath := fname + ".tmp"
+	ff, err := os.Create(tempPath)
 	if err != nil {
 		return err
 	}
-	defer ff.Close()
+
 	zw := gzip.NewWriter(ff)
-	defer zw.Close()
-
 	enc := json.NewEncoder(zw)
-	err = enc.Encode(rid)
+	if err := enc.Encode(rid); err != nil {
+		zw.Close()
+		ff.Close()
+		_ = os.Remove(tempPath)
+		return err
+	}
 
-	return err
+	if err := zw.Close(); err != nil {
+		ff.Close()
+		_ = os.Remove(tempPath)
+		return err
+	}
+
+	if err := ff.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		return err
+	}
+
+	if err := os.Rename(tempPath, fname); err != nil {
+		_ = os.Remove(fname)
+		if err := os.Rename(tempPath, fname); err != nil {
+			return err
+		}
+	}
+	return nil
 }

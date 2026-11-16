@@ -8,6 +8,9 @@ import (
 )
 
 func readPageTmdb(path string, params map[string]string, results interface{}) error {
+	if TMDBAuthKey == "" {
+		return errors.New("TMDB token not configured")
+	}
 
 	link := tmdbEndpoint + path
 	querys := url.Values{}

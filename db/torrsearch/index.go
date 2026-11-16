@@ -2,44 +2,86 @@ package torrsearch
 
 import (
 	"NUMParser/db/models"
+	"sync"
 )
 
-// Index is an inverted Index. It maps tokens to document IDs.
-type Index map[string][]int
+type indexData struct {
+	docs []*models.TorrentDetails
+	m    map[string][]int
+}
 
-var idx Index
+var (
+	idxLock sync.RWMutex
+	current *indexData
+)
 
 func NewIndex(torrs []*models.TorrentDetails) {
-	idx = make(Index)
-	idx.add(torrs)
-}
+	docsCopy := make([]*models.TorrentDetails, len(torrs))
+	copy(docsCopy, torrs)
 
-func Search(text string) []int {
-	return idx.search(text)
-}
-
-func GetIDX() Index {
-	return idx
-}
-
-func (idx Index) add(torrs []*models.TorrentDetails) {
-	for ID, torr := range torrs {
+	m := make(map[string][]int)
+	for id, torr := range docsCopy {
+		if torr == nil {
+			continue
+		}
 		for _, token := range analyze(torr.Title) {
-			ids := idx[token]
-			if ids != nil && ids[len(ids)-1] == ID {
-				// Don't add same ID twice.
+			ids := m[token]
+			if len(ids) > 0 && ids[len(ids)-1] == id {
 				continue
 			}
-			idx[token] = append(ids, ID)
+			m[token] = append(ids, id)
 		}
 	}
+
+	idxLock.Lock()
+	current = &indexData{
+		docs: docsCopy,
+		m:    m,
+	}
+	idxLock.Unlock()
 }
 
-// intersection returns the set intersection between a and b.
-// a and b have to be sorted in ascending order and contain no duplicates.
+func Search(text string) []*models.TorrentDetails {
+	idxLock.RLock()
+	snap := current
+	idxLock.RUnlock()
+
+	if snap == nil || len(snap.docs) == 0 {
+		return nil
+	}
+
+	var matchedIDs []int
+	for _, token := range analyze(text) {
+		ids, ok := snap.m[token]
+		if !ok {
+			return nil
+		}
+		if matchedIDs == nil {
+			matchedIDs = ids
+		} else {
+			matchedIDs = intersection(matchedIDs, ids)
+			if len(matchedIDs) == 0 {
+				return nil
+			}
+		}
+	}
+
+	if len(matchedIDs) == 0 {
+		return nil
+	}
+
+	res := make([]*models.TorrentDetails, 0, len(matchedIDs))
+	for _, id := range matchedIDs {
+		if id >= 0 && id < len(snap.docs) {
+			res = append(res, snap.docs[id])
+		}
+	}
+	return res
+}
+
 func intersection(a []int, b []int) []int {
 	maxLen := len(a)
-	if len(b) > maxLen {
+	if len(b) < maxLen {
 		maxLen = len(b)
 	}
 	r := make([]int, 0, maxLen)
@@ -53,24 +95,6 @@ func intersection(a []int, b []int) []int {
 			r = append(r, a[i])
 			i++
 			j++
-		}
-	}
-	return r
-}
-
-// Search queries the Index for the given text.
-func (idx Index) search(text string) []int {
-	var r []int
-	for _, token := range analyze(text) {
-		if ids, ok := idx[token]; ok {
-			if r == nil {
-				r = ids
-			} else {
-				r = intersection(r, ids)
-			}
-		} else {
-			// Token doesn't exist.
-			return nil
 		}
 	}
 	return r

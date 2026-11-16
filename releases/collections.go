@@ -22,46 +22,46 @@ import (
 )
 
 func GetCollections() {
-	log.Println("Update collections")
+	log.Println("Update collections: generating fresh weekly collections...")
 
-	var collections []*ml.Collection
-	var err error
-	for {
-		collections, err = ml.GenCollection(1)
-		if err != nil {
-			log.Println("Error while generating collection:", err)
-			return
-		}
-		if collections != nil && len(collections) > 0 && collections[0].Title != "" && collections[0].Overview != "" && collections[0].Prompt != "" {
-			break
-		}
-		time.Sleep(time.Second)
-		log.Println("Gen coll is empty, try again")
+	const weeklyCount = 25
+	collections, err := ml.GenCollection(weeklyCount)
+	if err != nil || len(collections) == 0 {
+		log.Println("Error while generating collections:", err)
+		return
 	}
 
-	ml.CollsConfig.Collections = ml.CollsConfig.Collections[:len(ml.CollsConfig.Collections)-1]
-	ml.CollsConfig.Collections = append(collections[:1], ml.CollsConfig.Collections...)
+	if ml.CollsConfig == nil {
+		ml.CollsConfig = &ml.CollectionsConfig{}
+	}
+	ml.CollsConfig.Collections = collections
+	ml.CollsConfig.LastUpdated = time.Now()
+	ml.SaveConfig()
 
-	log.Println("Collections count:", len(ml.CollsConfig.Collections))
+	log.Printf("Weekly collections count: %d\n", len(ml.CollsConfig.Collections))
 
 	var collsId []*CollectionId
 
-	os.RemoveAll(filepath.Join(config.SaveReleasePath, "imgs"))
-	os.MkdirAll(filepath.Join(config.SaveReleasePath, "imgs"), 0777)
+	os.MkdirAll(filepath.Join(config.SaveReleasePath, "imgs"), 0755)
 
 	for c, coll := range ml.CollsConfig.Collections {
-		fmt.Println("Get movies for coll:", coll.Title, c+1, "/", len(ml.CollsConfig.Collections))
+		fmt.Printf("Get movies for coll [%d/%d]: %s\n", c+1, len(ml.CollsConfig.Collections), coll.Title)
 		fmt.Println("Overview:", coll.Overview)
 		fmt.Println("Prompt:", coll.Prompt)
 
 		var movies []*ml.MovieInfo
-		for i := 0; i < 10; i++ {
+		for i := 0; i < 3; i++ {
 			movies, err = ml.GetCollectionMovies(coll)
-			if err == nil {
+			if err == nil && len(movies) > 0 {
 				break
 			}
-			log.Printf("Gemini error for '%s': %v", coll.Title, err)
-			time.Sleep(time.Second * 5)
+			log.Printf("AI error for '%s': %v (retry %d/3)", coll.Title, err, i+1)
+			time.Sleep(time.Second * 2)
+		}
+
+		if len(movies) == 0 {
+			log.Printf("Skipping collection %q: no movies found", coll.Title)
+			continue
 		}
 
 		var ents []*models.Entity
@@ -108,7 +108,6 @@ func GetCollections() {
 					found = append(found, e)
 				}
 				log.Println("Fill coll:", coll.Title, i+1, "/", len(ents))
-				utils.FreeOSMemGC()
 			}
 
 			if len(found) > 0 {
@@ -156,12 +155,14 @@ func GetCollections() {
 						log.Println("Cover build failed:", err)
 						imgfn = ""
 					}
-					collId.PosterPath = strings.ReplaceAll(imgfn, "public", "")
+					collId.PosterPath = strings.ReplaceAll(filepath.ToSlash(imgfn), "public", "")
 				}
 			}
 		}
 
 		fmt.Println()
+		// Polite delay between collections to avoid exceeding rate limits (15 RPM for Gemini, 30 RPM for Groq)
+		time.Sleep(2 * time.Second)
 	}
 
 	ml.SaveConfig()
@@ -170,18 +171,42 @@ func GetCollections() {
 
 	os.MkdirAll(config.SaveReleasePath, 0777)
 	fname := filepath.Join(config.SaveReleasePath, "colls_movie_ai.json")
+	tempPath := fname + ".tmp"
 
-	ff, err := os.Create(fname)
+	ff, err := os.Create(tempPath)
 	if err != nil {
+		log.Println("Error creating temp collections file:", err)
 		return
 	}
-	defer ff.Close()
-	zw := gzip.NewWriter(ff)
-	defer zw.Close()
 
+	zw := gzip.NewWriter(ff)
 	err = json.NewEncoder(zw).Encode(collsId)
 	if err != nil {
+		zw.Close()
+		ff.Close()
+		_ = os.Remove(tempPath)
 		log.Println("Error save collections:", err)
+		return
+	}
+
+	if err := zw.Close(); err != nil {
+		ff.Close()
+		_ = os.Remove(tempPath)
+		log.Println("Error closing gzip writer for collections:", err)
+		return
+	}
+
+	if err := ff.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		log.Println("Error closing collections file:", err)
+		return
+	}
+
+	if err := os.Rename(tempPath, fname); err != nil {
+		_ = os.Remove(fname)
+		if err := os.Rename(tempPath, fname); err != nil {
+			log.Println("Error renaming temp collections file:", err)
+		}
 	}
 
 	utils.FreeOSMemGC()
@@ -234,16 +259,19 @@ func getCollectionId(coll *ml.Collection, ents []*models.Entity) *CollectionId {
 		}
 	}
 
+	calcRank := func(voteAvg float64, voteCount int) float64 {
+		if voteCount <= 0 {
+			return 0
+		}
+		return voteAvg * math.Log(float64(voteCount+1))
+	}
+
 	sort.Slice(rid.Parts, func(i, j int) bool {
-		rankI := rid.Parts[i].VoteAverage * math.Log(float64(rid.Parts[i].VoteCount))
-		rankJ := rid.Parts[j].VoteAverage * math.Log(float64(rid.Parts[j].VoteCount))
-		return rankI > rankJ
+		return calcRank(rid.Parts[i].VoteAverage, rid.Parts[i].VoteCount) > calcRank(rid.Parts[j].VoteAverage, rid.Parts[j].VoteCount)
 	})
 
 	sort.Slice(ents, func(i, j int) bool {
-		rankI := ents[i].VoteAverage * math.Log(float64(ents[i].VoteCount))
-		rankJ := ents[j].VoteAverage * math.Log(float64(ents[j].VoteCount))
-		return rankI > rankJ
+		return calcRank(ents[i].VoteAverage, ents[i].VoteCount) > calcRank(ents[j].VoteAverage, ents[j].VoteCount)
 	})
 
 	return rid
@@ -253,12 +281,16 @@ func findTmdbMlMovie(movie *ml.MovieInfo) *models.Entity {
 	list := tmdb.Search(true, movie.Title)
 	yearml, _ := strconv.Atoi(movie.Year)
 
-	list = utils.Filter(list, func(i int, e *models.Entity) bool {
-		if len(e.ReleaseDate) > 6 {
-			year, _ := strconv.Atoi(e.ReleaseDate[6:])
-			return utils.Abs(year-yearml) > 1
+	matchesYear := func(e *models.Entity) bool {
+		y := tmdb.GetEntityYear(e)
+		if y == 0 || yearml == 0 {
+			return true
 		}
-		return true
+		return utils.Abs(y-yearml) <= 1
+	}
+
+	list = utils.Filter(list, func(i int, e *models.Entity) bool {
+		return !matchesYear(e)
 	})
 
 	if len(list) == 1 {
@@ -275,11 +307,7 @@ func findTmdbMlMovie(movie *ml.MovieInfo) *models.Entity {
 
 	if len(list) > 0 {
 		list = utils.Filter(list, func(i int, e *models.Entity) bool {
-			if len(e.ReleaseDate) > 6 {
-				year, _ := strconv.Atoi(e.ReleaseDate[6:])
-				return utils.Abs(year-yearml) > 1
-			}
-			return true
+			return !matchesYear(e)
 		})
 
 		list = utils.Filter(list, func(i int, e *models.Entity) bool {

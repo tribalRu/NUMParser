@@ -2,7 +2,7 @@ package tmdb
 
 import (
 	"NUMParser/db/models"
-	"github.com/jmcvetta/napping"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -28,8 +28,7 @@ func FixDate(date string) string {
 func GetGenres(gtype string) []*models.Genre {
 	var genres *models.GenresRequest
 
-	urlPages := napping.Params{
-		//"api_key":  apiKey,
+	urlPages := map[string]string{
 		"language": "ru",
 	}
 	endpoint := "genre/" + gtype + "/list"
@@ -130,4 +129,30 @@ func fixEntity(ent *models.Entity) {
 			ent.GenresIds = append(ent.GenresIds, g.ID)
 		}
 	}
+}
+
+func GetEntityYear(e *models.Entity) int {
+	if e == nil {
+		return 0
+	}
+	if e.Year != "" {
+		if y, err := strconv.Atoi(e.Year); err == nil && y > 0 {
+			return y
+		}
+	}
+	dateStr := e.ReleaseDate
+	if dateStr == "" {
+		dateStr = e.FirstAirDate
+	}
+	if len(dateStr) >= 4 {
+		if y, err := strconv.Atoi(dateStr[:4]); err == nil && y > 1800 && y < 2200 {
+			return y
+		}
+		if len(dateStr) >= 10 {
+			if y, err := strconv.Atoi(dateStr[len(dateStr)-4:]); err == nil && y > 1800 && y < 2200 {
+				return y
+			}
+		}
+	}
+	return 0
 }

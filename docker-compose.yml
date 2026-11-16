@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  numparser:
+    build: .
+    container_name: numparser
+    restart: unless-stopped
+    ports:
+      - "38888:38888"
+    environment:
+      - HOST_RUTOR=http://rutor.info
+      - PORT_RUTOR=38888
+      - USEPROXY_RUTOR=false
+      - PROXY_RUTOR=
+      - TZ=Europe/Moscow
+    volumes:
+      - ./data/db:/app/db
+      - ./data/releases:/app/public/releases

@@ -2,6 +2,7 @@ package releases
 
 import (
 	"NUMParser/db/models"
+	"NUMParser/db/storage"
 	tmdb2 "NUMParser/db/tmdb"
 	"NUMParser/movies/tmdb"
 	"NUMParser/parser"
@@ -18,16 +19,32 @@ import (
 func FillTMDB(label string, isMovie bool, torrs []*models.TorrentDetails, limit int) []*models.Entity {
 	list := make([]*models.Entity, len(torrs))
 	var found atomic.Int32
-	utils.PForLim(torrs, 20, func(i int, t *models.TorrentDetails) bool {
+	utils.PForLim(torrs, 6, func(i int, t *models.TorrentDetails) bool {
+		if storage.IsStopping() {
+			return false
+		}
 		var md *models.Entity
+		fromCache := false
+
+		if tmdb2.IsNotFound(t.Hash) {
+			// Checked on TMDB within TTL and not found; skip network queries
+			return true
+		}
+
 		indx := tmdb2.GetIndex(t.Hash)
 		if indx != 0 {
 			md = tmdb.GetVideoDetails(isMovie, indx)
+			if md != nil {
+				fromCache = true
+			}
 		}
 		if md == nil {
 			md = FindTMDBID(isMovie, t)
 			if md == nil {
 				md = FindTMDB(isMovie, t)
+			}
+			if md == nil {
+				tmdb2.SetNotFound(t.Hash)
 			}
 		}
 		if md == nil {
@@ -35,9 +52,13 @@ func FillTMDB(label string, isMovie bool, torrs []*models.TorrentDetails, limit 
 		} else {
 			list[i] = md
 			f := found.Add(1)
-			tmdb2.SetIndex(t, md)
+			if !fromCache {
+				tmdb2.SetIndex(t, md)
+				log.Println(label+":", "Find torr", i, "/", len(torrs), "in TMDB (API):", t.Title)
+			} else {
+				log.Println(label+":", "Find torr", i, "/", len(torrs), "in cache:", t.Title)
+			}
 			md.SetTorrent(t)
-			log.Println(label+":", "Find torr", i, "/", len(torrs), "in TMDB:", t.Title)
 			if limit > 0 && int(f) >= limit {
 				return false
 			}
@@ -45,7 +66,13 @@ func FillTMDB(label string, isMovie bool, torrs []*models.TorrentDetails, limit 
 		return true
 	})
 
-	return list
+	var result []*models.Entity
+	for _, md := range list {
+		if md != nil {
+			result = append(result, md)
+		}
+	}
+	return result
 }
 
 func FindTMDBID(isMovie bool, torr *models.TorrentDetails) *models.Entity {
@@ -53,32 +80,11 @@ func FindTMDBID(isMovie bool, torr *models.TorrentDetails) *models.Entity {
 		return tmdb.FindByID(isMovie, torr.IMDBID, "imdb_id")
 	}
 	body := parser.GetBodyLink(torr)
-	doc, err := goquery.NewDocumentFromReader(bytes.NewBufferString(body))
-	if err != nil {
+	if body == "" {
 		return nil
 	}
 
-	imdbID := ""
-	kpID := ""
-
-	doc.Find("table#details").Find("a").Each(func(i int, selection *goquery.Selection) {
-		if link, ok := selection.Attr("href"); ok {
-			if strings.Contains(link, "www.imdb.com") {
-				link = strings.TrimRight(link, "/")
-				arr := strings.Split(link, "/")
-				if len(arr) > 0 {
-					imdbID = arr[len(arr)-1]
-				}
-			}
-			if strings.Contains(link, "www.kinopoisk.ru") {
-				link = strings.TrimRight(link, "/")
-				arr := strings.Split(link, "/")
-				if len(arr) > 0 {
-					kpID = arr[len(arr)-1]
-				}
-			}
-		}
-	})
+	imdbID, kpID := extractIDsFromHTML(body)
 	if imdbID == "" && kpID == "" {
 		return nil
 	}
@@ -89,32 +95,57 @@ func FindTMDBID(isMovie bool, torr *models.TorrentDetails) *models.Entity {
 	if imdbID != "" {
 		return tmdb.FindByID(isMovie, imdbID, "imdb_id")
 	}
-
-	//if kpID != "" {
-	//	var result *struct {
-	//		Status string `json:"status"`
-	//		Data   *struct {
-	//			IDTmdb       int64  `json:"id_tmdb,omitempty"`
-	//			SeasonsCount *int64 `json:"seasons_count,omitempty"`
-	//		} `json:"data,omitempty"`
-	//	}
-	//	client.Get("https://api.alloha.tv/?token=04941a9a3ca3ac16e2b4327347bbc1&kp=" + kpID).EndStruct(&result)
-	//	if result != nil && result.Data != nil && result.Data.IDTmdb != 0 {
-	//		return tmdb.GetVideoDetails(isMovie, int64(result.Data.IDTmdb))
-	//	}
-	//}
 	return nil
+}
+
+func extractIDsFromHTML(body string) (imdbID, kpID string) {
+	doc, err := goquery.NewDocumentFromReader(bytes.NewBufferString(body))
+	if err != nil {
+		return "", ""
+	}
+
+	doc.Find("table#details").Find("a").Each(func(i int, selection *goquery.Selection) {
+		if link, ok := selection.Attr("href"); ok {
+			if strings.Contains(link, "imdb.com") {
+				link = strings.TrimRight(link, "/")
+				if idx := strings.IndexAny(link, "?#"); idx != -1 {
+					link = link[:idx]
+				}
+				link = strings.TrimRight(link, "/")
+				arr := strings.Split(link, "/")
+				if len(arr) > 0 {
+					imdbID = arr[len(arr)-1]
+				}
+			}
+			if strings.Contains(link, "kinopoisk.ru") {
+				link = strings.TrimRight(link, "/")
+				if idx := strings.IndexAny(link, "?#"); idx != -1 {
+					link = link[:idx]
+				}
+				link = strings.TrimRight(link, "/")
+				arr := strings.Split(link, "/")
+				if len(arr) > 0 {
+					kpID = arr[len(arr)-1]
+				}
+			}
+		}
+	})
+	return imdbID, kpID
 }
 
 func FindTMDB(isMovie bool, torr *models.TorrentDetails) *models.Entity {
 	list := tmdb.Search(isMovie, torr.Name)
 
-	list = utils.Filter(list, func(i int, e *models.Entity) bool {
-		if len(e.ReleaseDate) > 6 {
-			year, _ := strconv.Atoi(e.ReleaseDate[6:])
-			return utils.Abs(year-torr.Year) > 1
+	matchesYear := func(e *models.Entity) bool {
+		y := tmdb.GetEntityYear(e)
+		if y == 0 || torr.Year == 0 {
+			return true
 		}
-		return true
+		return utils.Abs(y-torr.Year) <= 1
+	}
+
+	list = utils.Filter(list, func(i int, e *models.Entity) bool {
+		return !matchesYear(e)
 	})
 
 	if len(list) == 1 {
@@ -122,16 +153,12 @@ func FindTMDB(isMovie bool, torr *models.TorrentDetails) *models.Entity {
 	}
 
 	for _, name := range torr.Names {
-		lst := tmdb.Search(true, name)
+		lst := tmdb.Search(isMovie, name)
 		list = append(list, lst...)
 	}
 
 	list = utils.Filter(list, func(i int, e *models.Entity) bool {
-		if len(e.ReleaseDate) > 6 {
-			year, _ := strconv.Atoi(e.ReleaseDate[6:])
-			return utils.Abs(year-torr.Year) > 1
-		}
-		return true
+		return !matchesYear(e)
 	})
 
 	list = utils.Distinct(list, func(e *models.Entity) string {
@@ -144,11 +171,7 @@ func FindTMDB(isMovie bool, torr *models.TorrentDetails) *models.Entity {
 
 	if len(list) > 0 {
 		list = utils.Filter(list, func(i int, e *models.Entity) bool {
-			if len(e.ReleaseDate) > 6 {
-				year, _ := strconv.Atoi(e.ReleaseDate[6:])
-				return utils.Abs(year-torr.Year) > 1
-			}
-			return true
+			return !matchesYear(e)
 		})
 		names := append([]string{torr.Name}, torr.Names...)
 		list = utils.Filter(list, func(i int, e *models.Entity) bool {

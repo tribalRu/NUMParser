@@ -1,13 +1,10 @@
 package utils
 
 import (
-	"NUMParser/db/models"
-	"github.com/agnivade/levenshtein"
 	"io"
 	"os"
 	"runtime"
 	"runtime/debug"
-	"strings"
 )
 
 func Abs(x int) int {
@@ -27,78 +24,28 @@ func Filter[T any](arr []T, fn func(i int, e T) bool) []T {
 	return list
 }
 
-func IsEqTorrKP(t *models.TorrentDetails, kp *models.KPDetail) bool {
-	if Abs(t.Year-kp.Year) > 1 {
-		return false
-	}
-	ruHash := ClearStr(t.Name)
-	ruLev := levenshtein.ComputeDistance(ruHash, ClearStr(strings.ToLower(kp.NameRu)))
-	isRu := false
-	isEn := false
-	if len(ruHash) == 0 || kp.NameRu == "" {
-		isRu = true
-	} else if len([]rune(ruHash)) > 5 {
-		isRu = ruLev < len([]rune(ruHash))/2
-	} else {
-		isRu = ruLev < len([]rune(ruHash))/3
-	}
-
-	if !isRu {
-		return false
-	}
-
-	if t.GetNames() == "" || kp.NameEn+kp.NameOriginal == "" {
-		isEn = true
-	}
-
-	if !isEn {
-		for _, name := range t.Names {
-			lev := levenshtein.ComputeDistance(ClearStr(name), ClearStr(kp.NameEn+kp.NameOriginal))
-			if len([]rune(ClearStr(name))) > 5 {
-				isEn = lev < len([]rune(ClearStr(name)))/2
-			} else {
-				isEn = lev < len([]rune(ClearStr(name)))/3
-			}
-			if isEn {
-				break
-			}
-		}
-	}
-
-	return isEn && isRu
-}
-
 func FreeOSMemGC() {
 	runtime.GC()
 	debug.FreeOSMemory()
 }
 
 func CopyFile(src, dst string) error {
-	// Открываем исходный файл
 	sourceFile, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer sourceFile.Close()
 
-	// Создаём/открываем файл назначения
 	destFile, err := os.Create(dst)
 	if err != nil {
 		return err
 	}
 	defer destFile.Close()
 
-	// Копируем содержимое
 	_, err = io.Copy(destFile, sourceFile)
 	if err != nil {
 		return err
 	}
 
-	// Сбрасываем буфер на диск
-	err = destFile.Sync()
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return destFile.Sync()
 }

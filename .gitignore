@@ -4,6 +4,9 @@
 *.dll
 *.so
 *.dylib
+upx
+numparser
+numparser.exe
 dist/
 tmp/
 public/releases

@@ -1,6 +1,7 @@
 package releases
 
 import (
+	"NUMParser/config"
 	"NUMParser/db"
 	"NUMParser/db/models"
 	"NUMParser/utils"
@@ -13,8 +14,9 @@ func GetNewCartoons() {
 	torrs := db.GetTorrs()
 	var list []*models.TorrentDetails
 
+	nowYear := time.Now().Year()
 	for _, torr := range torrs {
-		if torr.Categories == models.CatCartoonMovie && utils.Abs(torr.Year-time.Now().Year()) < 2 {
+		if torr.Categories == models.CatCartoonMovie && utils.Abs(torr.Year-nowYear) < 2 {
 			list = append(list, torr)
 		}
 	}
@@ -31,7 +33,14 @@ func GetNewCartoons() {
 
 	list = utils.UniqueTorrList(list)
 
-	ents := FillTMDB("Cartoons", true, list, 1000)
+	cfg := config.GetReleasesConfig()
+	limit := 3000
+	if cfg.MovieSort == "tracker" {
+		limit = 1000
+	}
+
+	ents := FillTMDB("Cartoons", true, list, limit)
+	ents = SortAndFilterMovies(ents, cfg.MovieSort, cfg.MovieMaxAgeMonths, 1000)
 
 	log.Println("Found torrents:", len(ents))
 	log.Println("All torrents:", len(list))

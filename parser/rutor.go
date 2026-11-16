@@ -4,6 +4,7 @@ import (
 	"NUMParser/config"
 	"NUMParser/db/models"
 	"NUMParser/db/rutor"
+	"NUMParser/db/storage"
 	"NUMParser/tasker"
 	"NUMParser/utils"
 	"bytes"
@@ -27,6 +28,11 @@ func loadRutorHost() string {
 var (
 	hostsPos = 0
 	mhost    sync.Mutex
+
+	titleRegex        = regexp.MustCompile(`(.+)\((.+)\)(.+)`)
+	bracketsRegex     = regexp.MustCompile(`\[.*?\]`)
+	catPagesRegex     = regexp.MustCompile(`<a href="/browse/([0-9]+)/[0-9]+/[0-9]+/[0-9]+"><b>[0-9]+(?:&nbsp;|\s)*-(?:&nbsp;|\s)*[0-9]+</b></a>`)
+	seriesMarkerRegex = regexp.MustCompile(`(?i)(сезон|сери[яий]|выпуск[иов]*|s\d+|s\d+e\d+|\[\s*\d+\s*(?:-\s*\d+)?\s*(?:из\s*\d+)?\s*\])`)
 )
 
 type RutorParser struct {
@@ -91,8 +97,14 @@ func (self *RutorParser) Parse() {
 			}
 
 			tsk.Add(func(pl interface{}) bool {
+				if storage.IsStopping() {
+					return false
+				}
 				p := pl.(parseLink)
 				list := self.parsePage(p)
+				if len(list) == 0 {
+					return true
+				}
 				finds := 0
 				for _, d := range list {
 					if _, ok := dbhashes[d.Hash]; ok {
@@ -115,6 +127,7 @@ func (self *RutorParser) Parse() {
 		t.Wait()
 	}
 	rutor.SaveTorrs()
+	utils.FreeOSMemGC()
 }
 
 // читаем категории и заносим в таски что парсить
@@ -138,23 +151,33 @@ func (self *RutorParser) readCategories() map[string]int {
 	var mm sync.Mutex
 
 	utils.PFor(categories, func(i int, cat string) {
+		if storage.IsStopping() {
+			return
+		}
 		link := getHost() + "/browse/0/" + cat + "/0/0"
 		body, err := get(link)
 		if err == nil {
-			re, err := regexp.Compile("<a href=\"/browse/([0-9]+)/[0-9]+/[0-9]+/[0-9]+\"><b>[0-9]+&nbsp;-&nbsp;[0-9]+</b></a></p>")
-			if err != nil {
-				log.Fatalf("Error compile regex %v", err)
-			}
-			matches := re.FindStringSubmatch(body)
-			if len(matches) > 1 {
-				pgs, err := strconv.Atoi(matches[1])
-				if err == nil {
-					mm.Lock()
-					pages[cat] = pgs
-					log.Println("Category readed", link, pgs)
-					mm.Unlock()
+			matches := catPagesRegex.FindAllStringSubmatch(body, -1)
+			if len(matches) > 0 {
+				lastMatch := matches[len(matches)-1]
+				if len(lastMatch) > 1 {
+					pgs, err := strconv.Atoi(lastMatch[1])
+					if err == nil && pgs > 0 {
+						mm.Lock()
+						pages[cat] = pgs
+						log.Println("Category readed", link, pgs)
+						mm.Unlock()
+						return
+					}
 				}
 			}
+			// Fallback: if single page or regex didn't match, at least scan page 0
+			mm.Lock()
+			pages[cat] = 1
+			log.Println("Category fallback page 0", link)
+			mm.Unlock()
+		} else {
+			log.Println("Error reading category:", link, err)
 		}
 	})
 
@@ -162,13 +185,17 @@ func (self *RutorParser) readCategories() map[string]int {
 }
 
 func (self *RutorParser) parsePage(pl parseLink) []*models.TorrentDetails {
+	if storage.IsStopping() {
+		return nil
+	}
 	// Парсим страницу с торрентами
 	body, err := get(pl.Link)
 	if err != nil {
 		log.Println("Error get page:", err, pl.Link)
 		return nil
 	}
-	if !strings.Contains(body, "<title>rutor.info") {
+	bodyLower := strings.ToLower(body)
+	if !strings.Contains(bodyLower, "<title>rutor") && !strings.Contains(body, "id=\"index\"") && !strings.Contains(body, "id='index'") {
 		log.Println("Not rutor page:", pl.Link)
 		return nil
 	}
@@ -186,31 +213,55 @@ func (self *RutorParser) parsePage(pl parseLink) []*models.TorrentDetails {
 			return
 		}
 		selTd := selection.Find("td")
+		if selTd.Length() < 4 {
+			return
+		}
+
+		tdDate := selTd.Eq(0)
+		tdTitle := selTd.Eq(1)
 
 		itm := new(models.TorrentDetails)
-		itm.CreateDate = self.parseDate(node2Text(selTd.Get(0)))
-		itm.Title = node2Text(selTd.Get(1))
+		itm.CreateDate = self.parseDate(strings.TrimSpace(tdDate.Text()))
+		itm.Title = strings.TrimSpace(tdTitle.Text())
 		self.parseTitle(itm, pl.Cat)
-		itm.Magnet = selTd.Get(1).FirstChild.NextSibling.Attr[0].Val
-		hash := getHash(itm.Magnet)
+
+		// Находим magnet-ссылку
+		magnet, _ := tdTitle.Find("a[href^='magnet:']").Attr("href")
+		if magnet == "" {
+			tdTitle.Find("a").Each(func(_ int, a *goquery.Selection) {
+				if href, ok := a.Attr("href"); ok && strings.HasPrefix(href, "magnet:") {
+					magnet = href
+				}
+			})
+		}
+		hash := getHash(magnet)
 		if hash == "" {
 			return
 		}
+		itm.Magnet = magnet
 		itm.Hash = hash
-		linkParam := selTd.Get(1).LastChild.Attr[0].Val
+
+		// Находим ссылку на подробности торрента
+		linkParam := ""
+		tdTitle.Find("a").Each(func(_ int, a *goquery.Selection) {
+			if href, ok := a.Attr("href"); ok && !strings.HasPrefix(href, "magnet:") {
+				linkParam = href
+			}
+		})
 		itm.Link = linkParam
-		if len(selTd.Nodes) == 4 {
-			itm.Size = node2Text(selTd.Get(2))
-			peers := node2Text(selTd.Get(3))
-			prarr := strings.Split(peers, "  ")
+
+		if selTd.Length() == 4 {
+			itm.Size = strings.TrimSpace(selTd.Eq(2).Text())
+			peers := strings.TrimSpace(selTd.Eq(3).Text())
+			prarr := strings.Fields(peers)
 			if len(prarr) > 1 {
 				itm.Seed, _ = strconv.Atoi(prarr[0])
 				itm.Peer, _ = strconv.Atoi(prarr[1])
 			}
-		} else if len(selTd.Nodes) == 5 {
-			itm.Size = node2Text(selTd.Get(3))
-			peers := node2Text(selTd.Get(4))
-			prarr := strings.Split(peers, "  ")
+		} else if selTd.Length() >= 5 {
+			itm.Size = strings.TrimSpace(selTd.Eq(3).Text())
+			peers := strings.TrimSpace(selTd.Eq(4).Text())
+			prarr := strings.Fields(peers)
 			if len(prarr) > 1 {
 				itm.Seed, _ = strconv.Atoi(prarr[0])
 				itm.Peer, _ = strconv.Atoi(prarr[1])
@@ -224,12 +275,7 @@ func (self *RutorParser) parsePage(pl parseLink) []*models.TorrentDetails {
 
 func (self *RutorParser) parseTitle(td *models.TorrentDetails, cat string) {
 	td.Title = strings.ReplaceAll(td.Title, "&amp;", "&")
-	re, err := regexp.Compile("(.+)\\((.+)\\)(.+)")
-	if err != nil {
-		log.Fatalf("Error parse torrent name: %v", err)
-	}
-	matches := re.FindStringSubmatch(td.Title)
-	re, err = regexp.Compile("\\[.*?\\]")
+	matches := titleRegex.FindStringSubmatch(td.Title)
 	if len(matches) > 2 {
 		yrs := strings.TrimSpace(matches[2])
 		if strings.Contains(yrs, "-") {
@@ -248,17 +294,17 @@ func (self *RutorParser) parseTitle(td *models.TorrentDetails, cat string) {
 			td.Name = arr[0]
 			td.Names = arr[1:]
 		}
-		if err == nil {
-			if strings.Contains(td.Title, "З/Л/О 94") {
-				td.Name = "З/Л/О 94"
-				td.Names = []string{"V/H/S/94"}
-			} else {
-				td.Name = strings.TrimSpace(re.ReplaceAllString(td.Name, ""))
-				for i := range td.Names {
-					td.Names[i] = strings.TrimSpace(re.ReplaceAllString(td.Names[i], ""))
-				}
+
+		if strings.Contains(td.Title, "З/Л/О 94") {
+			td.Name = "З/Л/О 94"
+			td.Names = []string{"V/H/S/94"}
+		} else {
+			td.Name = strings.TrimSpace(bracketsRegex.ReplaceAllString(td.Name, ""))
+			for i := range td.Names {
+				td.Names[i] = strings.TrimSpace(bracketsRegex.ReplaceAllString(td.Names[i], ""))
 			}
 		}
+
 		if len(matches) > 3 {
 			vq := ParseVQuality(strings.TrimSpace(matches[3]))
 			aq := ParseAQuality(strings.TrimSpace(matches[3]))
@@ -267,18 +313,13 @@ func (self *RutorParser) parseTitle(td *models.TorrentDetails, cat string) {
 		}
 	}
 
-	title := td.Title
-	if len(matches) > 0 {
-		title = matches[1]
-	}
-
 	switch {
 	case cat == "1", cat == "5", cat == "17":
 		td.Categories = models.CatMovie
 	case cat == "4", cat == "16":
 		td.Categories = models.CatSeries
 	case cat == "12":
-		if re.MatchString(title) {
+		if seriesMarkerRegex.MatchString(td.Title) {
 			td.Categories = models.CatDocSeries
 		} else {
 			td.Categories = models.CatDocMovie
@@ -286,7 +327,7 @@ func (self *RutorParser) parseTitle(td *models.TorrentDetails, cat string) {
 	case cat == "6", cat == "13", cat == "15":
 		td.Categories = models.CatTVShow
 	case cat == "7":
-		if re.MatchString(title) {
+		if seriesMarkerRegex.MatchString(td.Title) {
 			td.Categories = models.CatCartoonSeries
 		} else {
 			td.Categories = models.CatCartoonMovie
@@ -304,14 +345,38 @@ func (self *RutorParser) parseDate(date string) time.Time {
 		"Окт": 10, "Ноя": 11, "Дек": 12,
 	}
 
-	darr := strings.Split(date, " ")
+	date = strings.ReplaceAll(date, "\u00a0", " ")
+	date = strings.ReplaceAll(date, "&nbsp;", " ")
+	darr := strings.Fields(strings.TrimSpace(date))
 	if len(darr) != 3 {
-		return time.Date(0, 0, 0, 0, 0, 0, 0, time.Now().Location())
+		return time.Now()
 	}
 
-	day, _ := strconv.Atoi(darr[0])
-	month, _ := rutorMonth[darr[1]]
-	year, _ := strconv.Atoi("20" + darr[2])
+	day, err := strconv.Atoi(darr[0])
+	if err != nil || day < 1 || day > 31 {
+		day = 1
+	}
+
+	month, ok := rutorMonth[darr[1]]
+	if !ok || month < 1 || month > 12 {
+		month = int(time.Now().Month())
+	}
+
+	yearStr := strings.TrimSpace(darr[2])
+	var year int
+	if len(yearStr) == 2 {
+		if y, err := strconv.Atoi(yearStr); err == nil {
+			year = 2000 + y
+		}
+	} else if len(yearStr) == 4 {
+		if y, err := strconv.Atoi(yearStr); err == nil {
+			year = y
+		}
+	}
+
+	if year < 1970 || year > 2100 {
+		year = time.Now().Year()
+	}
 
 	return time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.Now().Location())
 }
@@ -390,57 +455,70 @@ func ParseVQuality(params string) int {
 	return models.Q_LOWER
 }
 
+func init() {
+	for i, qn := range Q_Lic_Names {
+		Q_Lic_Names[i] = clear(qn)
+	}
+	for i, qn := range Q_P_Names {
+		Q_P_Names[i] = clear(qn)
+	}
+	for i, qn := range Q_L_Names {
+		Q_L_Names[i] = clear(qn)
+	}
+}
+
 func ParseAQuality(params string) int {
 	arr := strings.Split(params, "|")
 	qualities := []int{}
-	for _, name := range arr {
-		name = clear(name)
+	for _, rawSegment := range arr {
+		name := clear(rawSegment)
+		words := strings.Fields(name)
+		wordSet := make(map[string]struct{}, len(words))
+		for _, w := range words {
+			wordSet[w] = struct{}{}
+		}
+
 		for _, qn := range Q_Lic_Names {
-			if strings.Contains(name, clear(qn)) {
+			if strings.Contains(name, qn) {
 				qualities = append(qualities, models.Q_LICENSE)
 			}
 		}
 		// Ищем проф студию
 		for _, qn := range Q_P_Names {
-			// одно слово ищем по словам
 			if !strings.Contains(qn, " ") {
-				arr := strings.Split(clear(name), " ")
-				for _, s := range arr {
-					if s == clear(qn) {
-						qualities = append(qualities, models.Q_PS)
-					}
+				if _, ok := wordSet[qn]; ok {
+					qualities = append(qualities, models.Q_PS)
 				}
 			} else {
-				if strings.Contains(name, clear(qn)) {
+				if strings.Contains(name, qn) {
 					qualities = append(qualities, models.Q_PS)
 				}
 			}
 		}
 		// Ищем любительскую студию
 		for _, qn := range Q_L_Names {
-			if strings.Contains(name, clear(qn)) {
+			if strings.Contains(name, qn) {
 				qualities = append(qualities, models.Q_LS)
 			}
 		}
 		// Ищем в названии упоминания озвучки
-		wrd := strings.Split(name, " ")
-		for _, w := range wrd {
-			w = strings.TrimSpace(w)
-			if w == "d" {
+		for _, w := range words {
+			switch w {
+			case "d":
 				qualities = append(qualities, models.Q_D)
-			} else if w == "p" {
+			case "p":
 				qualities = append(qualities, models.Q_P)
-			} else if w == "p2" {
+			case "p2":
 				qualities = append(qualities, models.Q_P2)
-			} else if w == "p1" {
+			case "p1":
 				qualities = append(qualities, models.Q_P1)
-			} else if w == "l" {
+			case "l":
 				qualities = append(qualities, models.Q_L)
-			} else if w == "l2" {
+			case "l2":
 				qualities = append(qualities, models.Q_L2)
-			} else if w == "l1" {
+			case "l1":
 				qualities = append(qualities, models.Q_L1)
-			} else if w == "a" {
+			case "a":
 				qualities = append(qualities, models.Q_A)
 			}
 		}

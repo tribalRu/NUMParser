@@ -1,22 +1,99 @@
-Usage:
+# numParser
 
-numParser-linux-amd64  [-p PORT] [--proxy http://user:password@ip:port]
+Парсер и агрегатор релизов торрент-трекера Rutor с обогащением метаданными из TMDB, генерацией умных коллекций с помощью Google Gemini AI и встроенным веб-интерфейсом поиска для клиентов NUM (No UI Movies).
 
-default PORT 38888
-default host http://rutor.info
+---
 
-Possible to change some setting with config file config.yml in the directory of numParser. Settings from the command line have priority under settings in the config.yml
+## Возможности
 
-##### Exemple of config.yml (possible to put settings in any combinations)
->
->host: http://6tor.org
->
->port: 29999
->
->useproxy: false
->
->proxy: http://user:password@ip:port
->
->tmdbtoken: 'Bearer [API Read Access Token]'
->
->aigkey: 'Google AI Studio API Key'
+- **Парсинг Rutor**: автоматический периодический сбор раздач по категориям (фильмы, сериалы, мультфильмы, аниме, 4K).
+- **Интеграция с TMDB**: обогащение раздач постерами, рейтингами, годами выпуска, странами и описаниями через TMDB API.
+- **Умные подборки через Google Gemini**: еженедельная генерация тематических киноколлекций с автоматической сборкой постеров-коллажей.
+- **Встроенный веб-интерфейс**:
+  - Быстрый локальный поиск по раздачам (`/`).
+  - Страница настроек (`/settings`) с возможностью изменения хоста, порта, токенов TMDB и AI без ручной правки файлов.
+  - JSON API поиска (`/search?query=...`) и настроек (`/api/settings`).
+- **Синхронизация с NUM**: генерация архивов релизов (`*.json` в gzip) и списка торрентов `rutor.ls`.
+- **Поддержка прокси**: поддержка статических HTTP/SOCKS5-прокси и динамических списков (`proxy.sh` / `proxy.bat`).
+- **Graceful Shutdown**: корректная остановка веб-сервера и баз данных BoltDB по сигналам `SIGINT` / `SIGTERM`.
+
+---
+
+## Запуск и использование
+
+### Запуск бинарного файла:
+```bash
+./numParser -p 38888 --proxy http://user:password@ip:port
+```
+
+### Параметры командной строки:
+- `-p` — порт веб-сервера (по умолчанию `38888`).
+- `--proxy` — адрес прокси-сервера (например, `http://user:password@ip:port`).
+- `--useproxy` — включить автоматическую ротацию прокси из `proxy.list`.
+
+---
+
+## Конфигурация (`config.yml`)
+
+Параметры командной строки имеют приоритет над файлом конфигурации. Пример `config.yml` (см. также `config.example.yml`):
+
+```yaml
+# Зеркало / адрес Rutor
+host: http://rutor.info
+
+# Порт веб-сервера
+port: 38888
+
+# Использовать динамический список прокси (скрипт proxy.sh / proxy.bat)
+useproxy: false
+
+# Статический HTTP или SOCKS5 прокси
+proxy: http://user:password@ip:port
+
+# Read Access Token TMDB v4 (необходим для постеров и информации о фильмах)
+tmdbtoken: "eyJhbGciOi..."
+
+# Ключ Google AI Studio API для генерации коллекций
+aigkey: "AIzaSy..."
+```
+
+Все параметры также можно передавать через переменные окружения:
+- `HOST_RUTOR`
+- `PORT_RUTOR`
+- `USEPROXY_RUTOR`
+- `PROXY_RUTOR`
+
+---
+
+## Сборка и тестирование
+
+### Требования:
+- Go 1.20+ (рекомендуется Go 1.22+)
+
+### Сборка:
+```bash
+go build -o numParser ./cmd
+```
+
+### Запуск тестов:
+```bash
+go test -v ./...
+```
+
+---
+
+## Запуск в Docker
+
+### Через Docker Compose:
+```bash
+docker compose up -d
+```
+
+### Сборка и запуск отдельного контейнера:
+```bash
+docker build -t numparser .
+docker run -d --name numparser -p 38888:38888 \
+  -v $(pwd)/data/db:/app/db \
+  -v $(pwd)/data/releases:/app/public/releases \
+  numparser
+```

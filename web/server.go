@@ -3,6 +3,9 @@ package web
 import (
 	"NUMParser/config"
 	"NUMParser/db"
+	"NUMParser/ml"
+	"NUMParser/releases"
+	"context"
 	"embed"
 	"io/fs"
 	"log"
@@ -30,8 +33,11 @@ func mustReadEmbed(name string) []byte {
 	return buf
 }
 
-var route *gin.Engine
-var currentPort string
+var (
+	route       *gin.Engine
+	currentPort string
+	httpServer  *http.Server
+)
 
 func setupRouter() *gin.Engine {
 	gin.DisableConsoleColor()
@@ -51,11 +57,56 @@ func setupRouter() *gin.Engine {
 	r.GET("/", func(c *gin.Context) {
 		c.Data(http.StatusOK, htmlType, indexHTML)
 	})
-	r.GET("/settings", func(c *gin.Context) {
+
+	// Protected settings routes
+	settingsGroup := r.Group("/", settingsAuthMiddleware())
+	settingsGroup.GET("/settings", func(c *gin.Context) {
 		c.Data(http.StatusOK, htmlType, settingsHTML)
 	})
-	r.GET("/settings/", func(c *gin.Context) {
+	settingsGroup.GET("/settings/", func(c *gin.Context) {
 		c.Data(http.StatusOK, htmlType, settingsHTML)
+	})
+	settingsGroup.GET("/api/settings", func(c *gin.Context) {
+		settings, err := config.LoadConfig()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"settings":         settings,
+			"restart_required": currentPort != "" && settings.Port != currentPort,
+		})
+	})
+	settingsGroup.POST("/api/settings", func(c *gin.Context) {
+		var settings config.ConfigParser
+		if err := c.ShouldBindJSON(&settings); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid settings payload"})
+			return
+		}
+
+		saved, err := config.SaveConfig(settings)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		ml.Init()
+
+		c.JSON(http.StatusOK, gin.H{
+			"settings":         saved,
+			"restart_required": currentPort != "" && saved.Port != currentPort,
+		})
+	})
+
+	settingsGroup.POST("/api/collections/generate", func(c *gin.Context) {
+		go func() {
+			releases.GetCollections()
+			db.SaveAll()
+		}()
+		c.JSON(http.StatusOK, gin.H{
+			"status":  "started",
+			"message": "Генерация коллекций запущена в фоновом режиме",
+		})
 	})
 
 	// http://127.0.0.1:38888/search?query=venom
@@ -76,51 +127,72 @@ func setupRouter() *gin.Engine {
 		return
 	})
 
-	r.GET("/api/settings", func(c *gin.Context) {
-		settings, err := config.LoadConfig()
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"settings":         settings,
-			"restart_required": currentPort != "" && settings.Port != currentPort,
-		})
-	})
-
-	r.POST("/api/settings", func(c *gin.Context) {
-		var settings config.ConfigParser
-		if err := c.ShouldBindJSON(&settings); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid settings payload"})
-			return
-		}
-
-		saved, err := config.SaveConfig(settings)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"settings":         saved,
-			"restart_required": currentPort != "" && saved.Port != currentPort,
-		})
-	})
-
 	return r
+}
+
+func settingsAuthMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		sec := config.GetSecurityConfig()
+		if !sec.EnableSettings {
+			c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "settings interface is disabled"})
+			return
+		}
+
+		if sec.AdminPassword == "" && sec.AccessKey == "" {
+			c.Next()
+			return
+		}
+
+		if sec.AccessKey != "" {
+			reqKey := c.Query("key")
+			if reqKey == "" {
+				reqKey = c.GetHeader("X-Access-Key")
+			}
+			if reqKey != "" && reqKey == sec.AccessKey {
+				c.Next()
+				return
+			}
+		}
+
+		user, pass, ok := c.Request.BasicAuth()
+		if ok {
+			if sec.AdminPassword != "" && pass == sec.AdminPassword {
+				c.Next()
+				return
+			}
+			if sec.AccessKey != "" && (pass == sec.AccessKey || user == sec.AccessKey) {
+				c.Next()
+				return
+			}
+		}
+
+		c.Header("WWW-Authenticate", `Basic realm="numParser Settings"`)
+		c.AbortWithStatus(http.StatusUnauthorized)
+	}
 }
 
 func Start(port string) {
 	log.Println("Init web")
+	currentPort = port
+	route = setupRouter()
+	addr := "0.0.0.0:" + port
+	httpServer = &http.Server{
+		Addr:    addr,
+		Handler: route,
+	}
 	go func() {
-		currentPort = port
-		route = setupRouter()
-		addr := "0.0.0.0:" + port
 		log.Println("Start web server on", addr)
-		err := route.Run(addr)
-		if err != nil {
+		err := httpServer.ListenAndServe()
+		if err != nil && err != http.ErrServerClosed {
 			log.Println("Error start web server on port", port, ":", err)
 		}
 	}()
+}
+
+func Stop(ctx context.Context) error {
+	if httpServer != nil {
+		log.Println("Stopping web server...")
+		return httpServer.Shutdown(ctx)
+	}
+	return nil
 }

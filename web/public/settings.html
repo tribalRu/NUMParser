@@ -54,6 +54,90 @@
                     <span>Google AI Studio key</span>
                     <input name="aigkey" type="password" autocomplete="off">
                 </label>
+
+                <label class="settings-field settings-field-wide">
+                    <span>Groq API key (резервная/альтернативная нейросеть, бесплатно на console.groq.com)</span>
+                    <input name="groqkey" type="password" autocomplete="off" placeholder="gsk_...">
+                </label>
+
+                <label class="settings-field">
+                    <span>Модель Groq</span>
+                    <select name="groqmodel">
+                        <option value="openai/gpt-oss-20b">openai/gpt-oss-20b (Быстрая, по умолчанию)</option>
+                        <option value="qwen/qwen3.8-27b">qwen/qwen3.8-27b (Отличный русский язык)</option>
+                        <option value="openai/gpt-oss-120b">openai/gpt-oss-120b (Большая умная модель)</option>
+                        <option value="allam-2-7b">allam-2-7b</option>
+                    </select>
+                </label>
+
+                <div class="settings-field settings-field-wide" style="display: flex; align-items: center; gap: 15px; margin-top: 5px;">
+                    <button type="button" id="btnGenColls" class="settings-button" style="background: #2a5298; border: none; padding: 8px 16px; border-radius: 4px; color: #fff; cursor: pointer; font-size: 0.95rem;">
+                        ⚡ Перегенерировать ИИ-подборки сейчас
+                    </button>
+                    <span id="genCollsStatus" style="font-size: 0.9rem; color: #bbb;"></span>
+                </div>
+
+                <div class="settings-field-wide" style="margin-top: 15px; margin-bottom: 5px; border-top: 1px solid #444; padding-top: 15px;">
+                    <h3 style="color: #fff; margin: 0 0 10px 0; font-size: 1.1rem;">Наполнение релизов для NUM</h3>
+                </div>
+
+                <label class="settings-field">
+                    <span>Сортировка фильмов</span>
+                    <select name="movie_sort">
+                        <option value="release_date">По дате премьеры (TMDB)</option>
+                        <option value="tracker">По дате на трекере</option>
+                    </select>
+                </label>
+
+                <label class="settings-field">
+                    <span>Макс. возраст фильмов (мес, 0 = без отсечения)</span>
+                    <input name="movie_max_age_months" type="number" min="0" max="120" placeholder="6">
+                </label>
+
+                <label class="settings-field">
+                    <span>Сортировка сериалов</span>
+                    <select name="tv_sort">
+                        <option value="last_air_date">По свежести серии (TMDB)</option>
+                        <option value="tracker">По дате на трекере</option>
+                    </select>
+                </label>
+
+                <label class="settings-field">
+                    <span>Макс. возраст серии (мес, 0 = без отсечения)</span>
+                    <input name="tv_max_age_months" type="number" min="0" max="120" placeholder="6">
+                </label>
+
+                <label class="settings-field">
+                    <span>Сортировка аниме</span>
+                    <select name="anime_sort">
+                        <option value="last_air_date">По свежести серии (TMDB)</option>
+                        <option value="tracker">По дате на трекере</option>
+                    </select>
+                </label>
+
+                <label class="settings-field">
+                    <span>Макс. возраст аниме (мес, 0 = без отсечения)</span>
+                    <input name="anime_max_age_months" type="number" min="0" max="120" placeholder="6">
+                </label>
+
+                <div class="settings-field-wide" style="margin-top: 15px; margin-bottom: 5px; border-top: 1px solid #444; padding-top: 15px;">
+                    <h3 style="color: #fff; margin: 0 0 10px 0; font-size: 1.1rem;">Безопасность раздела настроек</h3>
+                </div>
+
+                <label class="settings-check settings-field-wide">
+                    <input name="enable_settings" type="checkbox">
+                    <span>Разрешить доступ к веб-настройкам (снимите галочку для полного отключения на публичных серверах)</span>
+                </label>
+
+                <label class="settings-field">
+                    <span>Пароль администратора (логин: admin)</span>
+                    <input name="admin_password" type="password" autocomplete="off" placeholder="Оставьте пустым для отключения">
+                </label>
+
+                <label class="settings-field">
+                    <span>Секретный ключ (вход по ссылке ?key=...)</span>
+                    <input name="access_key" type="text" autocomplete="off" placeholder="Секретный ключ">
+                </label>
             </div>
 
             <div class="settings-actions">
@@ -89,6 +173,30 @@
         form.elements.useproxy.checked = Boolean(settings.useproxy)
         form.elements.tmdbtoken.value = settings.tmdbtoken || ''
         form.elements.aigkey.value = settings.aigkey || ''
+        form.elements.groqkey.value = settings.groqkey || ''
+        form.elements.groqmodel.value = settings.groqmodel || 'openai/gpt-oss-20b'
+
+        const rel = settings.releases || {}
+        form.elements.movie_sort.value = rel.movie_sort || 'release_date'
+        form.elements.movie_max_age_months.value = (rel.movie_max_age_months !== undefined) ? rel.movie_max_age_months : 6
+        form.elements.tv_sort.value = rel.tv_sort || 'last_air_date'
+        form.elements.tv_max_age_months.value = (rel.tv_max_age_months !== undefined) ? rel.tv_max_age_months : 6
+        form.elements.anime_sort.value = rel.anime_sort || 'last_air_date'
+        form.elements.anime_max_age_months.value = (rel.anime_max_age_months !== undefined) ? rel.anime_max_age_months : 6
+
+        const sec = settings.security || {}
+        form.elements.enable_settings.checked = (sec.enable_settings !== undefined) ? Boolean(sec.enable_settings) : true
+        form.elements.admin_password.value = sec.admin_password || ''
+        form.elements.access_key.value = sec.access_key || ''
+    }
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const accessKeyParam = urlParams.get('key') || '';
+
+    function apiUrl(path) {
+        if (!accessKeyParam) return path;
+        const sep = path.includes('?') ? '&' : '?';
+        return path + sep + 'key=' + encodeURIComponent(accessKeyParam);
     }
 
     function collectSettings() {
@@ -98,7 +206,22 @@
             proxy: form.elements.proxy.value.trim(),
             useproxy: form.elements.useproxy.checked,
             tmdbtoken: form.elements.tmdbtoken.value.trim(),
-            aigkey: form.elements.aigkey.value.trim()
+            aigkey: form.elements.aigkey.value.trim(),
+            groqkey: form.elements.groqkey.value.trim(),
+            groqmodel: form.elements.groqmodel.value.trim(),
+            releases: {
+                movie_sort: form.elements.movie_sort.value,
+                movie_max_age_months: parseInt(form.elements.movie_max_age_months.value, 10) || 0,
+                tv_sort: form.elements.tv_sort.value,
+                tv_max_age_months: parseInt(form.elements.tv_max_age_months.value, 10) || 0,
+                anime_sort: form.elements.anime_sort.value,
+                anime_max_age_months: parseInt(form.elements.anime_max_age_months.value, 10) || 0
+            },
+            security: {
+                enable_settings: form.elements.enable_settings.checked,
+                admin_password: form.elements.admin_password.value.trim(),
+                access_key: form.elements.access_key.value.trim()
+            }
         }
     }
 
@@ -106,7 +229,7 @@
         setFormDisabled(true)
         showMessage('Загрузка...', '')
         try {
-            const response = await fetch('/api/settings')
+            const response = await fetch(apiUrl('/api/settings'))
             const data = await response.json()
             if (!response.ok) {
                 throw new Error(data.error || 'Не удалось загрузить настройки')
@@ -125,9 +248,12 @@
         setFormDisabled(true)
         showMessage('Сохранение...', '')
         try {
-            const response = await fetch('/api/settings', {
+            const response = await fetch(apiUrl('/api/settings'), {
                 method: 'POST',
-                headers: {'Content-Type': 'application/json'},
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Access-Key': accessKeyParam
+                },
                 body: JSON.stringify(collectSettings())
             })
             const data = await response.json()
@@ -146,6 +272,35 @@
             setFormDisabled(false)
         }
     })
+
+    const btnGenColls = document.getElementById('btnGenColls')
+    const genCollsStatus = document.getElementById('genCollsStatus')
+    if (btnGenColls && genCollsStatus) {
+        btnGenColls.addEventListener('click', async function() {
+            btnGenColls.disabled = true
+            genCollsStatus.style.color = '#bbb'
+            genCollsStatus.textContent = 'Запуск генерации...'
+            try {
+                const response = await fetch(apiUrl('/api/collections/generate'), {
+                    method: 'POST',
+                    headers: { 'X-Access-Key': accessKeyParam }
+                })
+                const data = await response.json()
+                if (response.ok) {
+                    genCollsStatus.style.color = '#4caf50'
+                    genCollsStatus.textContent = 'Генерация запущена! Следите за логами сервера.'
+                } else {
+                    genCollsStatus.style.color = '#f44336'
+                    genCollsStatus.textContent = data.error || 'Ошибка запуска'
+                }
+            } catch (err) {
+                genCollsStatus.style.color = '#f44336'
+                genCollsStatus.textContent = 'Ошибка сети: ' + err.message
+            } finally {
+                setTimeout(() => { btnGenColls.disabled = false }, 5000)
+            }
+        })
+    }
 
     reloadButton.addEventListener('click', loadSettings)
     loadSettings()

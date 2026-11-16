@@ -9,6 +9,8 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
+	"sync"
 	"time"
 )
 
@@ -17,7 +19,7 @@ var Err404 = errors.New("404 not found")
 const (
 	dnsResolverIP        = "151.80.222.79:53"
 	dnsResolverProto     = "udp"
-	dnsResolverTimeoutMs = 10000
+	dnsResolverTimeoutMs = 3000
 )
 
 var nicHTTPClient = func() *http.Client {
@@ -48,6 +50,49 @@ var nicHTTPClient = func() *http.Client {
 
 	return &http.Client{Transport: transport, Timeout: 120 * time.Second}
 }()
+
+var (
+	transportsMu   sync.RWMutex
+	transportsPool = make(map[string]*http.Transport)
+)
+
+func getPooledTransport(proxyURL string) *http.Transport {
+	transportsMu.RLock()
+	tr, ok := transportsPool[proxyURL]
+	transportsMu.RUnlock()
+	if ok {
+		return tr
+	}
+
+	transportsMu.Lock()
+	defer transportsMu.Unlock()
+	if tr, ok = transportsPool[proxyURL]; ok {
+		return tr
+	}
+
+	tr = &http.Transport{
+		DisableKeepAlives:     false,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   20,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ForceAttemptHTTP2:     true,
+	}
+
+	if proxyURL != "" {
+		if parsed, err := url.Parse(proxyURL); err == nil {
+			tr.Proxy = http.ProxyURL(parsed)
+		} else {
+			tr.Proxy = http.ProxyFromEnvironment
+		}
+	} else {
+		tr.Proxy = http.ProxyFromEnvironment
+	}
+
+	transportsPool[proxyURL] = tr
+	return tr
+}
 
 func GetNic(link, referer, cookie string) (string, error) {
 	req, err := http.NewRequest("GET", link, nil)
@@ -107,17 +152,20 @@ func GetParam(link, referer, cookie string) *gorequest.SuperAgent {
 		agent.AppendHeader("referer", referer)
 	}
 
+	var proxyHost string
 	if config.UseProxy {
-		proxyHost := getProxyFromList()
+		proxyHost = getProxyFromList()
 		if proxyHost == "" {
 			proxyHost = config.ProxyHost
 		}
-		if proxyHost != "" {
-			agent.Proxy(proxyHost)
-		}
 	} else if config.ProxyHost != "" {
-		agent.Proxy(config.ProxyHost)
+		proxyHost = config.ProxyHost
 	}
+
+	tr := getPooledTransport(proxyHost)
+	agent.Transport = tr
+	agent.Client.Transport = tr
+
 	agent.Timeout(30 * time.Second)
 	return agent.Get(link)
 }

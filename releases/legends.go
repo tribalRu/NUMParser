@@ -43,7 +43,6 @@ func GetLegends() {
 			found = append(found, e)
 		}
 		log.Println("Fill legends:", i+1, "/", len(ents))
-		utils.FreeOSMemGC()
 	}
 
 	log.Println("Found torrents:", len(found))

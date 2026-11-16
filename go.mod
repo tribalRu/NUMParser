@@ -13,7 +13,6 @@ require (
 	github.com/gin-gonic/gin v1.8.1
 	github.com/ilyakaznacheev/cleanenv v1.5.0
 	github.com/jasonlvhit/gocron v0.0.1
-	github.com/jmcvetta/napping v3.2.0+incompatible
 	github.com/kljensen/snowball v0.6.0
 	github.com/parnurzeal/gorequest v0.2.16
 	go.etcd.io/bbolt v1.3.7
@@ -41,7 +40,6 @@ require (
 	github.com/google/s2a-go v0.1.8 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.4 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
-	github.com/jmcvetta/randutil v0.0.0-20150817122601-2bb1b664bcff // indirect
 	github.com/joho/godotenv v1.5.1 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/leodido/go-urn v1.2.1 // indirect

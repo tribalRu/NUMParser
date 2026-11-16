@@ -2,22 +2,19 @@ package parser
 
 import (
 	"NUMParser/client"
-	"github.com/PuerkitoBio/goquery"
-	"golang.org/x/net/html"
 	"log"
 	"strings"
 	"time"
+
+	"github.com/PuerkitoBio/goquery"
+	"golang.org/x/net/html"
 )
 
 func get(link string) (string, error) {
 	var body string
 	var err error
-	//fix rutor link with \t
 	link = strings.ReplaceAll(link, "\t", "%20")
-	for i := 0; i < 10; i++ {
-		if strings.Contains(link, "\t") {
-			link = strings.Replace(link, "\t", "", -1)
-		}
+	for i := 0; i < 4; i++ {
 		if strings.Contains(link, "rutor.lib") {
 			body, err = client.GetNic(link, "", "")
 		} else {
@@ -30,12 +27,8 @@ func get(link string) (string, error) {
 		if err == nil || err == client.Err404 {
 			break
 		}
-		log.Println("Error get page,tryes:", i+1, link, err)
-		if i < 5 {
-			time.Sleep(time.Minute)
-		} else {
-			time.Sleep(time.Minute * 10)
-		}
+		log.Println("Error get page, attempt:", i+1, link, err)
+		time.Sleep(time.Duration(2*(i+1)) * time.Second)
 	}
 	return body, err
 }
@@ -43,7 +36,7 @@ func get(link string) (string, error) {
 func getBuf(link, referer, cookie string) ([]byte, error) {
 	var body []byte
 	var err error
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 4; i++ {
 		_, bodyS, errs := client.GetParam(link, referer, cookie).EndBytes()
 		body = bodyS
 		if len(errs) > 0 {
@@ -52,13 +45,16 @@ func getBuf(link, referer, cookie string) ([]byte, error) {
 		if err == nil {
 			break
 		}
-		log.Println("Error get page,tryes:", i+1, link)
-		time.Sleep(time.Second * 2)
+		log.Println("Error get page, attempt:", i+1, link)
+		time.Sleep(time.Duration(2*(i+1)) * time.Second)
 	}
 	return body, err
 }
 
 func node2Text(node *html.Node) string {
+	if node == nil {
+		return ""
+	}
 	return strings.TrimSpace(strings.Replace((&goquery.Selection{Nodes: []*html.Node{node}}).Text(), "\u00A0", " ", -1))
 }
 
@@ -71,15 +67,14 @@ func replaceBadName(name string) string {
 }
 
 func getHash(magnet string) string {
-	//magnet:?xt=urn:btih:1debb44e9e9ac785aaa4c26507534e1357672a22&dn=rutor.info&tr=udp://opentor.net:6969&tr=http://retracker.local/announce
-	pos := strings.Index(magnet, "btih:")
+	lower := strings.ToLower(magnet)
+	pos := strings.Index(lower, "btih:")
 	if pos == -1 {
 		return ""
 	}
-	magnet = magnet[pos+5:]
-	pos = strings.Index(magnet, "&")
-	if pos == -1 {
-		return strings.ToLower(magnet)
+	hash := lower[pos+5:]
+	if amp := strings.Index(hash, "&"); amp != -1 {
+		hash = hash[:amp]
 	}
-	return strings.ToLower(magnet[:pos])
+	return hash
 }

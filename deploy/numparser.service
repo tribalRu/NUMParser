@@ -1,0 +1,15 @@
+[Unit]
+Description=numParser - Torrent Indexer and Release Generator for NUM
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/numparser
+ExecStart=/opt/numparser/numParser
+Restart=always
+RestartSec=5
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

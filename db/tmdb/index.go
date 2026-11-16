@@ -1,16 +1,21 @@
 package tmdb
 
 import (
-	"NUMParser/db/db"
 	"NUMParser/db/models"
+	"NUMParser/db/storage"
 	"NUMParser/db/utils"
-	bolt "go.etcd.io/bbolt"
 	"log"
+	"time"
+
+	bolt "go.etcd.io/bbolt"
 )
+
+// NotFoundTTL: re-check torrents without TMDB match after 14 days
+const NotFoundTTL = 14 * 24 * time.Hour
 
 func GetIndex(hash string) int64 {
 	var id int64
-	db.DB.View(func(tx *bolt.Tx) error {
+	storage.DB.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("TMDB"))
 		if bucket == nil {
 			return nil
@@ -30,10 +35,17 @@ func GetIndex(hash string) int64 {
 }
 
 func SetIndex(t *models.TorrentDetails, e *models.Entity) {
-	err := db.DB.Update(func(tx *bolt.Tx) error {
+	if storage.IsStopping() || t == nil || e == nil {
+		return
+	}
+
+	err := storage.DB.Update(func(tx *bolt.Tx) error {
 		bucket, err := tx.CreateBucketIfNotExists([]byte("TMDB"))
 		if err != nil {
 			return err
+		}
+		if nf := bucket.Bucket([]byte("NotFound")); nf != nil {
+			_ = nf.Delete([]byte(t.Hash))
 		}
 		bucket, err = bucket.CreateBucketIfNotExists([]byte("Index"))
 		if err != nil {
@@ -42,6 +54,57 @@ func SetIndex(t *models.TorrentDetails, e *models.Entity) {
 		return bucket.Put([]byte(t.Hash), utils.I2B(e.ID))
 	})
 	if err != nil {
-		log.Fatalln("Error write to db TMDB:", err)
+		log.Println("Error write to db TMDB:", err)
 	}
+}
+
+// IsNotFound returns true if hash was checked within NotFoundTTL and had no TMDB match
+func IsNotFound(hash string) bool {
+	if hash == "" {
+		return false
+	}
+	now := time.Now().Unix()
+	var checkedAt int64
+	storage.DB.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("TMDB"))
+		if b == nil {
+			return nil
+		}
+		nf := b.Bucket([]byte("NotFound"))
+		if nf == nil {
+			return nil
+		}
+		buf := nf.Get([]byte(hash))
+		if len(buf) > 0 {
+			checkedAt = utils.B2I(buf)
+		}
+		return nil
+	})
+
+	if checkedAt != 0 {
+		if now-checkedAt < int64(NotFoundTTL.Seconds()) {
+			return true
+		}
+	}
+	return false
+}
+
+// SetNotFound marks a torrent hash as checked with no TMDB match
+func SetNotFound(hash string) {
+	if storage.IsStopping() || hash == "" {
+		return
+	}
+	now := time.Now().Unix()
+
+	_ = storage.DB.Update(func(tx *bolt.Tx) error {
+		b, err := tx.CreateBucketIfNotExists([]byte("TMDB"))
+		if err != nil {
+			return err
+		}
+		nf, err := b.CreateBucketIfNotExists([]byte("NotFound"))
+		if err != nil {
+			return err
+		}
+		return nf.Put([]byte(hash), utils.I2B(now))
+	})
 }

@@ -7,6 +7,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	_ "image/jpeg"
@@ -81,6 +83,13 @@ func drawCard(dc *gg.Context, img image.Image, x, y, angle, darken float64) {
 }
 
 func BuildCover(urls []string, backs string, filename string) error {
+	if len(urls) > 4 {
+		urls = urls[:4]
+	}
+	if len(urls) == 0 {
+		return errors.New("no image URLs provided")
+	}
+
 	log.Println("Building cover")
 	log.Println("Building posters:")
 	for _, url := range urls {
@@ -123,6 +132,10 @@ func BuildCover(urls []string, backs string, filename string) error {
 		}
 		imgs = append(imgs, img)
 	}
+	if len(imgs) == 0 {
+		return errors.New("failed to fetch any poster image")
+	}
+
 	// reverse, чтобы сохранить прежний порядок отрисовки
 	for i, j := 0, len(imgs)-1; i < j; i, j = i+1, j-1 {
 		imgs[i], imgs[j] = imgs[j], imgs[i]
@@ -137,13 +150,24 @@ func BuildCover(urls []string, backs string, filename string) error {
 	}
 
 	count := len(imgs)
+	offsetStart := len(offsets) - count
+	if offsetStart < 0 {
+		offsetStart = 0
+	}
 	for i := 0; i < len(imgs); i++ {
-		x, y, angle := offsets[i][0], offsets[i][1], offsets[i][2]
+		idx := offsetStart + i
+		if idx >= len(offsets) {
+			idx = len(offsets) - 1
+		}
+		x, y, angle := offsets[idx][0], offsets[idx][1], offsets[idx][2]
 		darken := float64(count-i-1) / float64(count) * 0.9
 		drawCard(dc, imgs[i], x-50, y+20, angle, darken)
 	}
 
 	img := dc.Image()
 	imgSmall := imaging.Blur(img, 0.5)
+	if dir := filepath.Dir(filename); dir != "" {
+		_ = os.MkdirAll(dir, 0755)
+	}
 	return imaging.Save(imgSmall, filename)
 }
