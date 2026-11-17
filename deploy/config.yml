@@ -16,10 +16,10 @@ proxy: ""
 
 # TMDB API Read Access Token v4 (начинается с eyJ... или Bearer eyJ...)
 # Необходим для сопоставления раздач с TMDB, получения постеров, описаний, жанров и дат релизов
-tmdbtoken: 'Bearer eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiIzMzM3NjU2ZTc1MTgxYmFjYzNiYzMwOTdmNDFjNTk4MiIsIm5iZiI6MTcyOTcwOTE1NC43NzI1MTIsInN1YiI6IjYxMmI1NzVhNzRkNmMwMDA4ODE2MWNiMSIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.Yu2CiFCMtRieVUGlMmALXbaeN6IqINiAjYcoS8vaZoE'
+tmdbtoken: ''
 
 # Ключ Google AI Studio API для автоматической генерации коллекций фильмов нейросетью (основной)
-aigkey: 'AIzaSyBqfxSRqPr8rzOAFKVHdCEQg9lR4CRFxfA'
+aigkey: ''
 
 # Ключ Groq API (резервный ИИ при сбоях или исчерпании квоты Google, бесплатно на console.groq.com)
 groqkey: ''
