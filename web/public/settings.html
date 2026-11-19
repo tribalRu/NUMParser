@@ -135,22 +135,22 @@
                 </label>
 
                 <div class="settings-field-wide" style="margin-top: 15px; margin-bottom: 5px; border-top: 1px solid #444; padding-top: 15px;">
-                    <h3 style="color: #fff; margin: 0 0 10px 0; font-size: 1.1rem;">Фильтрация коллекций по рейтингу</h3>
+                    <h3 style="color: #fff; margin: 0 0 10px 0; font-size: 1.1rem;">Единая фильтрация по рейтингу (фильмы, сериалы, аниме, 4K, коллекции)</h3>
                 </div>
 
                 <label class="settings-field">
-                    <span>Мин. рейтинг для коллекций (0.0 = без фильтра)</span>
-                    <input name="colls_min_rating" type="number" step="0.1" min="0" max="10" placeholder="6.0">
+                    <span>Единый мин. рейтинг (0.0 = без фильтра)</span>
+                    <input name="min_rating" type="number" step="0.1" min="0" max="10" placeholder="6.0">
                 </label>
 
                 <label class="settings-field">
                     <span>Мин. оценок для строгого учета (порог новинки)</span>
-                    <input name="colls_min_votes" type="number" min="0" max="100000" placeholder="30">
+                    <input name="min_votes" type="number" min="0" max="100000" placeholder="30">
                 </label>
 
                 <label class="settings-field">
-                    <span>Срок новинки проката (мес, льгота новинок)</span>
-                    <input name="colls_fresh_months" type="number" min="0" max="120" placeholder="18">
+                    <span>Срок новинки (мес, льгота новинок кино и сериалов)</span>
+                    <input name="fresh_months" type="number" min="0" max="120" placeholder="18">
                 </label>
 
                 <div class="settings-field-wide" style="margin-top: 15px; margin-bottom: 5px; border-top: 1px solid #444; padding-top: 15px;">
@@ -247,9 +247,12 @@
         form.elements.tv_max_age_months.value = (rel.tv_max_age_months !== undefined) ? rel.tv_max_age_months : 6
         form.elements.anime_sort.value = rel.anime_sort || 'last_air_date'
         form.elements.anime_max_age_months.value = (rel.anime_max_age_months !== undefined) ? rel.anime_max_age_months : 6
-        form.elements.colls_min_rating.value = (rel.colls_min_rating !== undefined) ? rel.colls_min_rating : 6.0
-        form.elements.colls_min_votes.value = (rel.colls_min_votes !== undefined) ? rel.colls_min_votes : 30
-        form.elements.colls_fresh_months.value = (rel.colls_fresh_months !== undefined) ? rel.colls_fresh_months : 18
+        const minRatingVal = (rel.min_rating !== undefined) ? rel.min_rating : ((rel.colls_min_rating !== undefined) ? rel.colls_min_rating : 6.0)
+        const minVotesVal = (rel.min_votes !== undefined) ? rel.min_votes : ((rel.colls_min_votes !== undefined) ? rel.colls_min_votes : 30)
+        const freshMonthsVal = (rel.fresh_months !== undefined) ? rel.fresh_months : ((rel.colls_fresh_months !== undefined) ? rel.colls_fresh_months : 18)
+        form.elements.min_rating.value = minRatingVal
+        form.elements.min_votes.value = minVotesVal
+        form.elements.fresh_months.value = freshMonthsVal
 
         const imdbCfg = settings.imdb || {}
         form.elements.imdb_enabled.checked = (imdbCfg.enabled !== undefined) ? Boolean(imdbCfg.enabled) : true
@@ -291,9 +294,12 @@
                 tv_max_age_months: parseInt(form.elements.tv_max_age_months.value, 10) || 0,
                 anime_sort: form.elements.anime_sort.value,
                 anime_max_age_months: parseInt(form.elements.anime_max_age_months.value, 10) || 0,
-                colls_min_rating: parseFloat(form.elements.colls_min_rating.value) || 0.0,
-                colls_min_votes: parseInt(form.elements.colls_min_votes.value, 10) || 0,
-                colls_fresh_months: parseInt(form.elements.colls_fresh_months.value, 10) || 0
+                min_rating: parseFloat(form.elements.min_rating.value) || 0.0,
+                min_votes: parseInt(form.elements.min_votes.value, 10) || 0,
+                fresh_months: parseInt(form.elements.fresh_months.value, 10) || 0,
+                colls_min_rating: parseFloat(form.elements.min_rating.value) || 0.0,
+                colls_min_votes: parseInt(form.elements.min_votes.value, 10) || 0,
+                colls_fresh_months: parseInt(form.elements.fresh_months.value, 10) || 0
             },
             imdb: {
                 enabled: form.elements.imdb_enabled.checked,

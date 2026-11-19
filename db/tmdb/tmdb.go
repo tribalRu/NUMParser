@@ -56,6 +56,9 @@ func GetMovie(id int64) *models.Entity {
 	if ent := getCachedEntity(movieCache, id); ent != nil {
 		return ent
 	}
+	if storage.DB == nil {
+		return nil
+	}
 	var ent *models.Entity
 	storage.DB.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("TMDB"))
@@ -86,6 +89,9 @@ func GetTV(id int64) *models.Entity {
 	if ent := getCachedEntity(tvCache, id); ent != nil {
 		return ent
 	}
+	if storage.DB == nil {
+		return nil
+	}
 	var ent *models.Entity
 	storage.DB.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("TMDB"))
@@ -115,7 +121,7 @@ func GetTV(id int64) *models.Entity {
 var errStopIter = errors.New("stop")
 
 func FindIMDB(id string) *models.Entity {
-	if id == "" {
+	if id == "" || storage.DB == nil {
 		return nil
 	}
 
@@ -201,7 +207,7 @@ func FindIMDB(id string) *models.Entity {
 }
 
 func AddTMDB(t *models.Entity) {
-	if storage.IsStopping() {
+	if storage.IsStopping() || storage.DB == nil {
 		return
 	}
 	t.UpdateDate = time.Now()

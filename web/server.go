@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"path/filepath"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -54,6 +55,7 @@ func setupRouter() *gin.Engine {
 	r.StaticFS("/img", subFS("public/img"))
 	r.StaticFS("/js", subFS("public/js"))
 	r.Static("/releases", config.SaveReleasePath)
+	r.StaticFile("/rutor.ls", filepath.Join(config.SaveReleasePath, "rutor.ls"))
 
 	indexHTML := mustReadEmbed("public/index.html")
 	settingsHTML := mustReadEmbed("public/settings.html")
@@ -145,6 +147,9 @@ func setupRouter() *gin.Engine {
 			host := config.RutorHost()
 			out := make([]interface{}, 0, len(torrs))
 			for _, t := range torrs {
+				if t == nil {
+					continue
+				}
 				cp := *t
 				cp.Link = config.JoinRutorLink(host, cp.Link)
 				out = append(out, cp)

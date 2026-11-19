@@ -27,9 +27,12 @@ type ReleasesConfig struct {
 	TVMaxAgeMonths    int     `yaml:"tv_max_age_months" json:"tv_max_age_months" env:"RELEASES_TV_MAX_AGE_MONTHS" env-default:"6"`
 	AnimeSort         string  `yaml:"anime_sort" json:"anime_sort" env:"RELEASES_ANIME_SORT" env-default:"last_air_date"`
 	AnimeMaxAgeMonths int     `yaml:"anime_max_age_months" json:"anime_max_age_months" env:"RELEASES_ANIME_MAX_AGE_MONTHS" env-default:"6"`
-	CollsMinRating    float64 `yaml:"colls_min_rating" json:"colls_min_rating" env:"RELEASES_COLLS_MIN_RATING" env-default:"6.0"`
-	CollsMinVotes     int     `yaml:"colls_min_votes" json:"colls_min_votes" env:"RELEASES_COLLS_MIN_VOTES" env-default:"30"`
-	CollsFreshMonths  int     `yaml:"colls_fresh_months" json:"colls_fresh_months" env:"RELEASES_COLLS_FRESH_MONTHS" env-default:"18"`
+	MinRating         float64 `yaml:"min_rating" json:"min_rating" env:"RELEASES_MIN_RATING" env-default:"6.0"`
+	MinVotes          int     `yaml:"min_votes" json:"min_votes" env:"RELEASES_MIN_VOTES" env-default:"30"`
+	FreshMonths       int     `yaml:"fresh_months" json:"fresh_months" env:"RELEASES_FRESH_MONTHS" env-default:"18"`
+	CollsMinRating    float64 `yaml:"colls_min_rating,omitempty" json:"colls_min_rating,omitempty"`
+	CollsMinVotes     int     `yaml:"colls_min_votes,omitempty" json:"colls_min_votes,omitempty"`
+	CollsFreshMonths  int     `yaml:"colls_fresh_months,omitempty" json:"colls_fresh_months,omitempty"`
 }
 
 type SecurityConfig struct {
@@ -42,7 +45,7 @@ type ImdbConfig struct {
 	Enabled          bool   `yaml:"enabled" json:"enabled" env:"IMDB_ENABLED" env-default:"true"`
 	Host             string `yaml:"host" json:"host" env:"IMDB_HOST" env-default:"http://192.168.1.73:8000"`
 	Token            string `yaml:"token" json:"token" env:"IMDB_TOKEN" env-default:""`
-	TimeoutSec       int    `yaml:"timeout_sec" json:"timeout_sec" env:"IMDB_TIMEOUT_SEC" env-default:"5"`
+	TimeoutSec       int    `yaml:"timeout_sec" json:"timeout_sec" env:"IMDB_TIMEOUT_SEC" env-default:"1"`
 	PreferImdbRating bool   `yaml:"prefer_imdb_rating" json:"prefer_imdb_rating" env:"IMDB_PREFER_RATING" env-default:"true"`
 }
 
@@ -80,6 +83,9 @@ func DefaultConfig() ConfigParser {
 			TVMaxAgeMonths:    6,
 			AnimeSort:         "last_air_date",
 			AnimeMaxAgeMonths: 6,
+			MinRating:         6.0,
+			MinVotes:          30,
+			FreshMonths:       18,
 			CollsMinRating:    6.0,
 			CollsMinVotes:     30,
 			CollsFreshMonths:  18,
@@ -93,7 +99,7 @@ func DefaultConfig() ConfigParser {
 			Enabled:          true,
 			Host:             "http://192.168.1.73:8000",
 			Token:            "",
-			TimeoutSec:       5,
+			TimeoutSec:       1,
 			PreferImdbRating: true,
 		},
 	}
@@ -223,18 +229,33 @@ func (c *ConfigParser) Normalize() {
 	if c.Releases.AnimeMaxAgeMonths < 0 {
 		c.Releases.AnimeMaxAgeMonths = 0
 	}
-	if c.Releases.CollsMinRating < 0 {
-		c.Releases.CollsMinRating = 0
+
+	if c.Releases.MinRating == 0 && c.Releases.CollsMinRating > 0 {
+		c.Releases.MinRating = c.Releases.CollsMinRating
 	}
-	if c.Releases.CollsMinRating > 10 {
-		c.Releases.CollsMinRating = 10
+	if c.Releases.MinRating < 0 {
+		c.Releases.MinRating = 0
 	}
-	if c.Releases.CollsMinVotes < 0 {
-		c.Releases.CollsMinVotes = 0
+	if c.Releases.MinRating > 10 {
+		c.Releases.MinRating = 10
 	}
-	if c.Releases.CollsFreshMonths < 0 {
-		c.Releases.CollsFreshMonths = 0
+	c.Releases.CollsMinRating = c.Releases.MinRating
+
+	if c.Releases.MinVotes == 0 && c.Releases.CollsMinVotes > 0 {
+		c.Releases.MinVotes = c.Releases.CollsMinVotes
 	}
+	if c.Releases.MinVotes < 0 {
+		c.Releases.MinVotes = 0
+	}
+	c.Releases.CollsMinVotes = c.Releases.MinVotes
+
+	if c.Releases.FreshMonths == 0 && c.Releases.CollsFreshMonths > 0 {
+		c.Releases.FreshMonths = c.Releases.CollsFreshMonths
+	}
+	if c.Releases.FreshMonths < 0 {
+		c.Releases.FreshMonths = 0
+	}
+	c.Releases.CollsFreshMonths = c.Releases.FreshMonths
 
 	c.Imdb.Host = strings.TrimSpace(c.Imdb.Host)
 	c.Imdb.Host = strings.TrimRight(c.Imdb.Host, "/")
@@ -243,7 +264,7 @@ func (c *ConfigParser) Normalize() {
 	}
 	c.Imdb.Token = strings.TrimSpace(c.Imdb.Token)
 	if c.Imdb.TimeoutSec <= 0 {
-		c.Imdb.TimeoutSec = 5
+		c.Imdb.TimeoutSec = 1
 	}
 
 	c.Security.AdminPassword = strings.TrimSpace(c.Security.AdminPassword)

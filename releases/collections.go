@@ -3,14 +3,12 @@ package releases
 import (
 	"NUMParser/config"
 	"NUMParser/db"
-	"NUMParser/db/imdb"
 	"NUMParser/db/models"
 	"NUMParser/ml"
 	"NUMParser/movies/tmdb"
 	"NUMParser/releases/cover"
 	"NUMParser/utils"
 	"compress/gzip"
-	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -384,92 +382,6 @@ func cleanTmdbImgPath(path string) string {
 	return "/" + path
 }
 
-func enrichWithImdb(e *models.Entity) {
-	if e == nil {
-		return
-	}
-	cfg := config.GetImdbConfig()
-	if !cfg.Enabled {
-		return
-	}
-	if e.ImdbID == "" {
-		fullEnt := tmdb.GetVideoDetails(true, e.ID)
-		if fullEnt != nil && fullEnt.ImdbID != "" {
-			e.ImdbID = fullEnt.ImdbID
-		}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.TimeoutSec)*time.Second)
-	defer cancel()
-	imdb.EnrichEntity(ctx, e)
-}
-
-// GetEffectiveRating returns the active rating, vote count, and data source ("imdb" or "tmdb").
-func GetEffectiveRating(e *models.Entity) (float64, int, string) {
-	if e == nil {
-		return 0, 0, "none"
-	}
-	cfg := config.GetImdbConfig()
-	if cfg.Enabled && cfg.PreferImdbRating && e.ImdbRating > 0 {
-		return e.ImdbRating, e.ImdbVotes, "IMDb"
-	}
-	if e.VoteAverage > 0 || e.VoteCount > 0 {
-		return e.VoteAverage, e.VoteCount, "TMDB"
-	}
-	if e.ImdbRating > 0 {
-		return e.ImdbRating, e.ImdbVotes, "IMDb"
-	}
-	return 0, 0, "none"
-}
-
-// isEntityEligibleForCollection determines if an entity satisfies rating requirements,
-// granting a grace period for newly released/in-theater movies or unrated materials.
-func isEntityEligibleForCollection(e *models.Entity, relCfg config.ReleasesConfig) (bool, string) {
-	if e == nil {
-		return false, "nil entity"
-	}
-
-	if relCfg.CollsMinRating <= 0 {
-		return true, "filter disabled"
-	}
-
-	rating, votes, source := GetEffectiveRating(e)
-
-	// 1. Удовлетворяет порогу рейтинга
-	if rating >= relCfg.CollsMinRating {
-		return true, fmt.Sprintf("%s %.1f >= %.1f", source, rating, relCfg.CollsMinRating)
-	}
-
-	// 2. Проверка льготы для новинок проката и фильмов без устоявшихся оценок
-	relDate := GetMovieDate(e)
-	freshMonths := relCfg.CollsFreshMonths
-	if freshMonths <= 0 {
-		freshMonths = 18
-	}
-	cutoffDate := time.Now().AddDate(0, -freshMonths, 0)
-	isFresh := relDate.IsZero() || relDate.After(cutoffDate)
-
-	// А) Фильм только вышел и оценок еще нет (VoteCount == 0 или rating == 0)
-	if isFresh && (votes == 0 || rating == 0) {
-		dateStr := "нет даты"
-		if !relDate.IsZero() {
-			dateStr = relDate.Format("02.01.2006")
-		}
-		return true, fmt.Sprintf("новинка проката без оценок (%s)", dateStr)
-	}
-
-	// Б) Фильм вышел недавно и количество оценок статистически мало (< colls_min_votes)
-	minVotes := relCfg.CollsMinVotes
-	if minVotes <= 0 {
-		minVotes = 30
-	}
-	if isFresh && votes < minVotes {
-		return true, fmt.Sprintf("новинка проката с малым числом оценок (%d < %d)", votes, minVotes)
-	}
-
-	// Фильм старый или имеет достаточное число оценок, подтверждающих низкий рейтинг
-	return false, fmt.Sprintf("%s %.1f (%d оценок) < %.1f", source, rating, votes, relCfg.CollsMinRating)
-}
-
 func getCollectionId(coll *ml.Collection, ents []*models.Entity) *CollectionId {
 	rid := &CollectionId{
 		Name:         coll.Title,
@@ -550,20 +462,14 @@ func getCollectionId(coll *ml.Collection, ents []*models.Entity) *CollectionId {
 				Voice:    d.AudioQuality,
 			}
 			tid := &TmdbId{
-				Id:           e.ID,
-				MediaType:    e.MediaType,
-				Title:        e.Title,
-				PosterPath:   cleanTmdbImgPath(e.PosterPath),
-				BackdropPath: cleanTmdbImgPath(e.BackdropPath),
-				GenreIds:     e.GenresIds,
-				VoteAverage:  e.VoteAverage,
-				VoteCount:    e.VoteCount,
-				ImdbRating:   e.ImdbRating,
-				ImdbVotes:    e.ImdbVotes,
-				ImdbID:       e.ImdbID,
-				Countries:    countries,
-				ReleaseDate:  e.ReleaseDate,
-				Torrent:      []*Torrent{&t},
+				Id:          e.ID,
+				MediaType:   e.MediaType,
+				GenreIds:    e.GenresIds,
+				VoteAverage: e.VoteAverage,
+				VoteCount:   e.VoteCount,
+				Countries:   countries,
+				ReleaseDate: e.ReleaseDate,
+				Torrent:     []*Torrent{&t},
 			}
 			rid.Parts = append(rid.Parts, tid)
 		}

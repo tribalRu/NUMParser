@@ -20,6 +20,16 @@ func save(fname string, ents []*models.Entity) {
 	ents = utils.Filter(ents, func(i int, e *models.Entity) bool {
 		return e == nil || e.GetTorrent() == nil
 	})
+	relCfg := config.GetReleasesConfig()
+	EnrichEntitiesBatch(ents)
+	ents = utils.Filter(ents, func(i int, e *models.Entity) bool {
+		eligible, reason := IsEntityEligible(e, relCfg)
+		if !eligible {
+			log.Printf("[Filter Save %s] Skipping %q: %s\n", fname, e.Title, reason)
+			return true
+		}
+		return false
+	})
 	ents = utils.Distinct(ents, func(e *models.Entity) string {
 		return strconv.FormatInt(e.ID, 10)
 	})

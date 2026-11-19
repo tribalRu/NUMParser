@@ -1,7 +1,9 @@
 package releases
 
 import (
+	"NUMParser/config"
 	"NUMParser/db/models"
+	"log"
 	"sort"
 	"strconv"
 	"strings"
@@ -122,9 +124,18 @@ func isWithinAgeLimit(d time.Time, maxAgeMonths int, now time.Time) bool {
 func SortAndFilterMovies(ents []*models.Entity, sortMode string, maxAgeMonths int, limit int) []*models.Entity {
 	now := time.Now()
 	var filtered []*models.Entity
+	relCfg := config.GetReleasesConfig()
+
+	// Fast batch preloading of IMDb ratings for all candidate movies at once
+	EnrichEntitiesBatch(ents)
 
 	for _, e := range ents {
 		if e == nil || e.GetTorrent() == nil {
+			continue
+		}
+
+		if eligible, reason := IsEntityEligible(e, relCfg); !eligible {
+			log.Printf("[Filter Movies] Skipping %q (%v): %s\n", e.Title, e.Year, reason)
 			continue
 		}
 
@@ -189,9 +200,18 @@ func SortAndFilterMovies(ents []*models.Entity, sortMode string, maxAgeMonths in
 func SortAndFilterTV(ents []*models.Entity, sortMode string, maxAgeMonths int, limit int) []*models.Entity {
 	now := time.Now()
 	var filtered []*models.Entity
+	relCfg := config.GetReleasesConfig()
+
+	// Fast batch preloading of IMDb ratings for all series at once
+	EnrichEntitiesBatch(ents)
 
 	for _, e := range ents {
 		if e == nil || e.GetTorrent() == nil {
+			continue
+		}
+
+		if eligible, reason := IsEntityEligible(e, relCfg); !eligible {
+			log.Printf("[Filter TV] Skipping %q (%v): %s\n", e.Title, e.Year, reason)
 			continue
 		}
 

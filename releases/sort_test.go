@@ -52,6 +52,8 @@ func TestSortAndFilterMovies(t *testing.T) {
 		ID:          2,
 		Title:       "Old Re-upload",
 		ReleaseDate: now.AddDate(-2, 0, 0).Format("02.01.2006"), // 2 years ago
+		VoteAverage: 7.5,
+		VoteCount:   500,
 	}
 	torr2 := &models.TorrentDetails{
 		Title:        "Old Re-upload Remux",
@@ -119,6 +121,8 @@ func TestSortAndFilterTV(t *testing.T) {
 		Title:        "Lost Complete BDRip",
 		FirstAirDate: "22.09.2004",
 		LastAirDate:  "23.05.2010",
+		VoteAverage:  8.3,
+		VoteCount:    600000,
 	}
 	torr2 := &models.TorrentDetails{
 		Title:      "Lost Complete BDRip 1080p",

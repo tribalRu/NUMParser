@@ -72,6 +72,7 @@ func FillTMDB(label string, isMovie bool, torrs []*models.TorrentDetails, limit 
 			result = append(result, md)
 		}
 	}
+	EnrichEntitiesBatch(result)
 	return result
 }
 

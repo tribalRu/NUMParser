@@ -37,15 +37,47 @@ var (
 
 	clientOnce sync.Once
 	httpClient *http.Client
+
+	cbMu            sync.RWMutex
+	consecutiveErrs int
+	cbOpenUntil     time.Time
 )
 
+// IsCircuitBreakerOpen returns true if imdb-db is currently in temporary cooldown due to consecutive connection failures.
+func IsCircuitBreakerOpen() bool {
+	cbMu.RLock()
+	defer cbMu.RUnlock()
+	return time.Now().Before(cbOpenUntil)
+}
+
+func recordSuccess() {
+	cbMu.Lock()
+	defer cbMu.Unlock()
+	consecutiveErrs = 0
+	cbOpenUntil = time.Time{}
+}
+
+func recordFailure(err error) {
+	cbMu.Lock()
+	defer cbMu.Unlock()
+	consecutiveErrs++
+	if consecutiveErrs >= 2 {
+		cbOpenUntil = time.Now().Add(60 * time.Second)
+		log.Printf("[IMDb] Сервер базы недоступен (%v). Отключаем запросы к IMDb на 60 сек для быстрой работы парсера.\n", err)
+	}
+}
+
 func getHTTPClient(timeoutSec int) *http.Client {
+	if timeoutSec <= 0 {
+		timeoutSec = 1
+	}
 	clientOnce.Do(func() {
 		tr := &http.Transport{
-			MaxIdleConns:        50,
-			MaxIdleConnsPerHost: 20,
-			IdleConnTimeout:     60 * time.Second,
-			TLSHandshakeTimeout: 5 * time.Second,
+			MaxIdleConns:          100,
+			MaxIdleConnsPerHost:   50,
+			IdleConnTimeout:       60 * time.Second,
+			TLSHandshakeTimeout:   2 * time.Second,
+			ResponseHeaderTimeout: time.Duration(timeoutSec) * time.Second,
 		}
 		httpClient = &http.Client{
 			Transport: tr,
@@ -88,9 +120,11 @@ func Ping(ctx context.Context) error {
 	cli := getHTTPClient(cfg.TimeoutSec)
 	resp, err := cli.Do(req)
 	if err != nil {
+		recordFailure(err)
 		return fmt.Errorf("imdb-db connection failed: %w", err)
 	}
 	defer resp.Body.Close()
+	recordSuccess()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("imdb-db returned HTTP %d", resp.StatusCode)
@@ -107,10 +141,12 @@ func GetTitle(ctx context.Context, tconst string) (*TitleDetails, error) {
 	}
 
 	if val, ok := titleCache.Load(tconst); ok {
-		if val == nil {
-			return nil, nil
-		}
-		return val.(*TitleDetails), nil
+		details, _ := val.(*TitleDetails)
+		return details, nil
+	}
+
+	if IsCircuitBreakerOpen() {
+		return nil, fmt.Errorf("imdb-db circuit breaker open")
 	}
 
 	cfg := config.GetImdbConfig()
@@ -127,9 +163,11 @@ func GetTitle(ctx context.Context, tconst string) (*TitleDetails, error) {
 	cli := getHTTPClient(cfg.TimeoutSec)
 	resp, err := cli.Do(req)
 	if err != nil {
+		recordFailure(err)
 		return nil, err
 	}
 	defer resp.Body.Close()
+	recordSuccess()
 
 	if resp.StatusCode == http.StatusNotFound {
 		titleCache.Store(tconst, (*TitleDetails)(nil))
@@ -161,8 +199,8 @@ func GetTitlesBatch(ctx context.Context, tconsts []string) (map[string]*TitleDet
 			continue
 		}
 		if val, ok := titleCache.Load(tc); ok {
-			if val != nil {
-				result[tc] = val.(*TitleDetails)
+			if details, _ := val.(*TitleDetails); details != nil {
+				result[tc] = details
 			}
 		} else {
 			missing = append(missing, tc)
@@ -173,17 +211,24 @@ func GetTitlesBatch(ctx context.Context, tconsts []string) (map[string]*TitleDet
 		return result, nil
 	}
 
+	if IsCircuitBreakerOpen() {
+		return result, fmt.Errorf("imdb-db circuit breaker open")
+	}
+
 	cfg := config.GetImdbConfig()
 	if !cfg.Enabled || cfg.Host == "" {
 		return result, nil
 	}
 
-	// Chunk queries into groups of 200 (imdb-db limit is 500)
-	const chunkSize = 200
+	// Chunk queries into groups of 300 (fast batching)
+	const chunkSize = 300
 	cli := getHTTPClient(cfg.TimeoutSec)
 	baseURL := strings.TrimRight(cfg.Host, "/") + "/api/titles"
 
 	for i := 0; i < len(missing); i += chunkSize {
+		if IsCircuitBreakerOpen() {
+			break
+		}
 		end := i + chunkSize
 		if end > len(missing) {
 			end = len(missing)
@@ -204,9 +249,11 @@ func GetTitlesBatch(ctx context.Context, tconsts []string) (map[string]*TitleDet
 
 		resp, err := cli.Do(req)
 		if err != nil {
+			recordFailure(err)
 			log.Printf("[IMDb] Batch request error: %v\n", err)
 			continue
 		}
+		recordSuccess()
 
 		if resp.StatusCode != http.StatusOK {
 			resp.Body.Close()
@@ -249,10 +296,12 @@ func SearchTitle(ctx context.Context, query string, year int) (*TitleDetails, er
 
 	cacheKey := fmt.Sprintf("%s:%d", strings.ToLower(query), year)
 	if val, ok := searchCache.Load(cacheKey); ok {
-		if val == nil {
-			return nil, nil
-		}
-		return val.(*TitleDetails), nil
+		details, _ := val.(*TitleDetails)
+		return details, nil
+	}
+
+	if IsCircuitBreakerOpen() {
+		return nil, fmt.Errorf("imdb-db circuit breaker open")
 	}
 
 	cfg := config.GetImdbConfig()
@@ -276,9 +325,11 @@ func SearchTitle(ctx context.Context, query string, year int) (*TitleDetails, er
 	cli := getHTTPClient(cfg.TimeoutSec)
 	resp, err := cli.Do(req)
 	if err != nil {
+		recordFailure(err)
 		return nil, err
 	}
 	defer resp.Body.Close()
+	recordSuccess()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("imdb search returned HTTP %d", resp.StatusCode)
@@ -333,14 +384,74 @@ func SearchTitle(ctx context.Context, query string, year int) (*TitleDetails, er
 	return details, nil
 }
 
+// EnrichEntitiesBatch performs ultra-fast batch enrichment of hundreds or thousands of entities at once.
+func EnrichEntitiesBatch(ctx context.Context, ents []*models.Entity) {
+	if len(ents) == 0 {
+		return
+	}
+	cfg := config.GetImdbConfig()
+	if !cfg.Enabled || cfg.Host == "" || IsCircuitBreakerOpen() {
+		return
+	}
+
+	var missing []string
+	seen := make(map[string]bool)
+
+	for _, e := range ents {
+		if e == nil || e.ImdbRating > 0 {
+			continue
+		}
+		if e.ImdbID == "" && e.GetTorrent() != nil && e.GetTorrent().IMDBID != "" {
+			e.ImdbID = e.GetTorrent().IMDBID
+		}
+		if e.ImdbID != "" && !seen[e.ImdbID] {
+			seen[e.ImdbID] = true
+			if _, ok := titleCache.Load(e.ImdbID); !ok {
+				missing = append(missing, e.ImdbID)
+			}
+		}
+	}
+
+	if len(missing) > 0 {
+		_, _ = GetTitlesBatch(ctx, missing)
+	}
+
+	// Apply data from cache to entities in memory (0 ms)
+	for _, e := range ents {
+		if e == nil || e.ImdbID == "" || e.ImdbRating > 0 {
+			continue
+		}
+		if val, ok := titleCache.Load(e.ImdbID); ok {
+			details, _ := val.(*TitleDetails)
+			if details == nil {
+				continue
+			}
+			if details.AverageRating != nil && *details.AverageRating > 0 {
+				e.ImdbRating = *details.AverageRating
+				if details.NumVotes != nil {
+					e.ImdbVotes = *details.NumVotes
+				}
+				e.RatingSource = "imdb"
+				if cfg.PreferImdbRating {
+					e.VoteAverage = e.ImdbRating
+					e.VoteCount = e.ImdbVotes
+				}
+			}
+			if details.RuntimeMinutes != nil && *details.RuntimeMinutes > 0 && e.Runtime == 0 {
+				e.Runtime = *details.RuntimeMinutes
+			}
+		}
+	}
+}
+
 // EnrichEntity enriches an Entity with IMDb ratings, votes, and metadata.
 func EnrichEntity(ctx context.Context, ent *models.Entity) bool {
-	if ent == nil {
-		return false
+	if ent == nil || ent.ImdbRating > 0 {
+		return ent != nil && ent.ImdbRating > 0
 	}
 
 	cfg := config.GetImdbConfig()
-	if !cfg.Enabled {
+	if !cfg.Enabled || IsCircuitBreakerOpen() {
 		return false
 	}
 
@@ -348,12 +459,15 @@ func EnrichEntity(ctx context.Context, ent *models.Entity) bool {
 	var err error
 
 	// 1. Поиск по ImdbID
+	if ent.ImdbID == "" && ent.GetTorrent() != nil && ent.GetTorrent().IMDBID != "" {
+		ent.ImdbID = ent.GetTorrent().IMDBID
+	}
 	if ent.ImdbID != "" {
 		details, err = GetTitle(ctx, ent.ImdbID)
 	}
 
-	// 2. Если ImdbID не найден, пробуем поиск по оригинальному названию / названию
-	if (details == nil || err != nil) && ent.OriginalTitle != "" {
+	// 2. Если ImdbID не найден, пробуем поиск по названию только если цепь не разорвана
+	if (details == nil || err != nil) && !IsCircuitBreakerOpen() && ent.OriginalTitle != "" {
 		y, _ := strconv.Atoi(ent.Year)
 		details, _ = SearchTitle(ctx, ent.OriginalTitle, y)
 		if details == nil && ent.Title != "" {

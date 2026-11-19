@@ -114,22 +114,22 @@ func TestGetCollectionIdDeduplication(t *testing.T) {
 		t.Fatalf("expected exactly 3 deduplicated parts, got %d", len(collId.Parts))
 	}
 
-	expectedTitles := map[string]bool{
-		"Миллионер из трущоб": false,
-		"Престиж":             false,
-		"Начало":              false,
+	expectedIDs := map[int64]bool{
+		101: false,
+		201: false,
+		301: false,
 	}
 
 	for _, p := range collId.Parts {
-		if _, ok := expectedTitles[p.Title]; !ok {
-			t.Errorf("unexpected part title: %s", p.Title)
+		if _, ok := expectedIDs[p.Id]; !ok {
+			t.Errorf("unexpected part ID: %d", p.Id)
 		}
-		expectedTitles[p.Title] = true
+		expectedIDs[p.Id] = true
 	}
 
-	for title, found := range expectedTitles {
+	for id, found := range expectedIDs {
 		if !found {
-			t.Errorf("expected film %s was not found in collection parts", title)
+			t.Errorf("expected film with ID %d was not found in collection parts", id)
 		}
 	}
 }

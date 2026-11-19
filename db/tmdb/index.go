@@ -14,6 +14,9 @@ import (
 const NotFoundTTL = 14 * 24 * time.Hour
 
 func GetIndex(hash string) int64 {
+	if storage.DB == nil {
+		return 0
+	}
 	var id int64
 	storage.DB.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("TMDB"))
@@ -35,7 +38,7 @@ func GetIndex(hash string) int64 {
 }
 
 func SetIndex(t *models.TorrentDetails, e *models.Entity) {
-	if storage.IsStopping() || t == nil || e == nil {
+	if storage.IsStopping() || storage.DB == nil || t == nil || e == nil {
 		return
 	}
 
@@ -60,7 +63,7 @@ func SetIndex(t *models.TorrentDetails, e *models.Entity) {
 
 // IsNotFound returns true if hash was checked within NotFoundTTL and had no TMDB match
 func IsNotFound(hash string) bool {
-	if hash == "" {
+	if hash == "" || storage.DB == nil {
 		return false
 	}
 	now := time.Now().Unix()
@@ -91,7 +94,7 @@ func IsNotFound(hash string) bool {
 
 // SetNotFound marks a torrent hash as checked with no TMDB match
 func SetNotFound(hash string) {
-	if storage.IsStopping() || hash == "" {
+	if storage.IsStopping() || storage.DB == nil || hash == "" {
 		return
 	}
 	now := time.Now().Unix()

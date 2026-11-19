@@ -5,6 +5,7 @@ import (
 	"NUMParser/db/models"
 	"NUMParser/db/storage"
 	"NUMParser/db/torrsearch"
+	"NUMParser/utils"
 	"compress/flate"
 	"encoding/json"
 	bolt "go.etcd.io/bbolt"
@@ -367,4 +368,5 @@ func saveRutorLS(torrsList []*models.TorrentDetails) {
 			log.Println("Error renaming temp to rutor.ls:", err)
 		}
 	}
+	_ = utils.CopyFile(destPath, "rutor.ls")
 }

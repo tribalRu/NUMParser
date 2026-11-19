@@ -66,6 +66,23 @@ func TestLiveImdbDB(t *testing.T) {
 	if ent.VoteAverage != ent.ImdbRating {
 		t.Errorf("expected VoteAverage to be updated with ImdbRating when prefer_imdb_rating=true")
 	}
+
+	// 5. Live EnrichEntitiesBatch with existing and non-existing IDs (must not panic on typed nil!)
+	entsBatch := []*models.Entity{
+		{Title: "Побег из Шоушенка", ImdbID: "tt0111161"},
+		{Title: "Несуществующий фильм", ImdbID: "tt0000000null"},
+		{Title: "Начало", ImdbID: "tt1375666"},
+	}
+	EnrichEntitiesBatch(ctx, entsBatch)
+	if entsBatch[0].ImdbRating < 9.0 {
+		t.Errorf("expected Shawshank batch rating >= 9.0, got %f", entsBatch[0].ImdbRating)
+	}
+	if entsBatch[1].ImdbRating != 0 {
+		t.Errorf("expected non-existing title rating to be 0, got %f", entsBatch[1].ImdbRating)
+	}
+	if entsBatch[2].ImdbRating < 8.0 {
+		t.Errorf("expected Inception batch rating >= 8.0, got %f", entsBatch[2].ImdbRating)
+	}
 }
 
 func TestMockImdbClient(t *testing.T) {
