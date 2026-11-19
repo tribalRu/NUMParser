@@ -85,6 +85,27 @@ func TestParseCollectionsJSON(t *testing.T) {
 	if len(collsWrapper) != 1 || collsWrapper[0].Title != "Советская классика" {
 		t.Errorf("unexpected wrapper collections: %+v", collsWrapper)
 	}
+
+	// 4. Conversational preamble and postscript from LLM
+	conversationalJSON := "Конечно! Вот подборка на эту неделю:\n```json\n" + wrapperJSON + "\n```\nНадеюсь, вам понравится!"
+	collsConv, err := parseCollectionsJSON(conversationalJSON)
+	if err != nil {
+		t.Fatalf("failed to parse conversational wrapped JSON: %v", err)
+	}
+	if len(collsConv) != 1 || collsConv[0].Title != "Советская классика" {
+		t.Errorf("unexpected conversational collections: %+v", collsConv)
+	}
+}
+
+func TestParseTitlesDeduplication(t *testing.T) {
+	input := "Миллионер из трущоб (2008); Престиж (2006); Миллионер из трущоб (2008); Престиж (2006); Начало (2010);"
+	movies := parseTitles(input)
+	if len(movies) != 3 {
+		t.Fatalf("expected 3 deduplicated movies, got %d", len(movies))
+	}
+	if movies[0].Title != "Миллионер из трущоб" || movies[1].Title != "Престиж" || movies[2].Title != "Начало" {
+		t.Errorf("unexpected parsed movies: %+v", movies)
+	}
 }
 
 func TestRotateDefaultCollections(t *testing.T) {
@@ -117,14 +138,26 @@ func TestGetRecentReleasesContext(t *testing.T) {
 }
 
 func TestRankModel(t *testing.T) {
-	if rankModel("openai/gpt-oss-20b") >= rankModel("openai/gpt-oss-120b") {
-		t.Errorf("gpt-oss-20b should have higher priority than gpt-oss-120b")
+	if rankModel("qwen/qwen3.8-27b") >= rankModel("openai/gpt-oss-120b") {
+		t.Errorf("qwen should have higher priority (lower rank number) than gpt-oss-120b")
 	}
-	if rankModel("qwen/qwen3.8-27b") >= rankModel("allam-2-7b") {
-		t.Errorf("qwen should have higher priority than allam")
+	if rankModel("openai/gpt-oss-120b") >= rankModel("openai/gpt-oss-20b") {
+		t.Errorf("gpt-oss-120b should have higher priority than gpt-oss-20b")
 	}
-	if rankModel("allam-2-7b") <= rankModel("openai/gpt-oss-20b") {
-		t.Errorf("allam should have lower priority than gpt-oss-20b")
+	if rankModel("openai/gpt-oss-20b") >= rankModel("allam-2-7b") {
+		t.Errorf("gpt-oss-20b should have higher priority than allam")
+	}
+}
+
+func TestGetCollectionTopicCandidates(t *testing.T) {
+	candidates := GetCollectionTopicCandidates("Киберпанк", "Фантастика будущее", 10)
+	// Without running DB returns empty string without panic
+	_ = candidates
+}
+
+func TestRankOpenRouterModel(t *testing.T) {
+	if rankOpenRouterModel("google/gemma-4-31b-it:free") >= rankOpenRouterModel("unknown/model:free") {
+		t.Errorf("gemma should rank higher than unknown")
 	}
 }
 

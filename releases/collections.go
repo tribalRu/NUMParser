@@ -3,12 +3,14 @@ package releases
 import (
 	"NUMParser/config"
 	"NUMParser/db"
+	"NUMParser/db/imdb"
 	"NUMParser/db/models"
 	"NUMParser/ml"
 	"NUMParser/movies/tmdb"
 	"NUMParser/releases/cover"
 	"NUMParser/utils"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -18,10 +20,28 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
+var (
+	isGenerating    atomic.Bool
+	tmdbSearchCache sync.Map
+)
+
+// IsGenerating returns true if collections are currently being generated
+func IsGenerating() bool {
+	return isGenerating.Load()
+}
+
 func GetCollections() {
+	if isGenerating.Swap(true) {
+		log.Println("Collections generation is already in progress, skipping duplicate request")
+		return
+	}
+	defer isGenerating.Store(false)
+
 	log.Println("Update collections: generating fresh weekly collections...")
 
 	const weeklyCount = 25
@@ -64,6 +84,7 @@ func GetCollections() {
 			continue
 		}
 
+		relCfg := config.GetReleasesConfig()
 		var ents []*models.Entity
 		var found []*models.Entity
 
@@ -72,7 +93,17 @@ func GetCollections() {
 			fmt.Printf("%s (%s) == ", movie.Title, movie.Year)
 			e := findTmdbMlMovie(movie)
 			if e != nil {
-				fmt.Printf("%s | %s (%v): %v, %.2f\n", e.Title, e.OriginalTitle, e.Year, e.ID, e.VoteAverage*math.Log(float64(e.VoteCount)))
+				enrichWithImdb(e)
+
+				eligible, reason := isEntityEligibleForCollection(e, relCfg)
+				if !eligible {
+					fmt.Printf("%s | %s (%v): отсеян по рейтингу [%s]\n", e.Title, e.OriginalTitle, e.Year, reason)
+					continue
+				}
+
+				rating, votes, source := GetEffectiveRating(e)
+				fmt.Printf("%s | %s (%v): %v, %.2f [%s: %.1f (%d votes)]\n",
+					e.Title, e.OriginalTitle, e.Year, e.ID, e.VoteAverage*math.Log(float64(e.VoteCount+1)), source, rating, votes)
 				ents = append(ents, e)
 			} else {
 				fmt.Println("TMDB not found")
@@ -81,18 +112,42 @@ func GetCollections() {
 
 		fmt.Println("Found tmdb for coll:", coll.Title, len(ents))
 		if len(ents) > 0 {
-			fmt.Println("Search torrents for cols")
-			for i, e := range ents {
-				list := db.SearchTorr(e.Title + " " + e.OriginalTitle + " " + e.Year)
-				if len(list) == 0 {
-					names := getEnNames(e.Titles)
-					for _, name := range names {
-						list = db.SearchTorr(e.Title + " " + name + " " + e.Year)
-						if len(list) > 0 {
-							break
-						}
-					}
+			// Множественная дедупликация сущностей TMDB:
+			// Фильтруем по ID, очищенному русскому названию и английскому названию
+			seenEntityID := make(map[int64]bool)
+			seenEntityTitle := make(map[string]bool)
+			var uniqueEnts []*models.Entity
+			for _, e := range ents {
+				if e == nil {
+					continue
 				}
+				if seenEntityID[e.ID] {
+					continue
+				}
+				cleanT := utils.ClearStr(e.Title)
+				if cleanT != "" && seenEntityTitle[cleanT] {
+					continue
+				}
+				cleanOrig := utils.ClearStr(e.OriginalTitle)
+				if cleanOrig != "" && seenEntityTitle[cleanOrig] {
+					continue
+				}
+				seenEntityID[e.ID] = true
+				if cleanT != "" {
+					seenEntityTitle[cleanT] = true
+				}
+				if cleanOrig != "" {
+					seenEntityTitle[cleanOrig] = true
+				}
+				uniqueEnts = append(uniqueEnts, e)
+			}
+			ents = uniqueEnts
+			fmt.Println("Search torrents for cols (unique):", len(ents))
+
+			seenTorrHash := make(map[string]bool)
+			seenTorrName := make(map[string]bool)
+			for i, e := range ents {
+				list := searchTorrForEntity(e)
 				if len(list) > 0 {
 					sort.Slice(list, func(i, j int) bool {
 						if list[i].CreateDate == list[j].CreateDate {
@@ -104,8 +159,34 @@ func GetCollections() {
 						return list[i].CreateDate.After(list[j].CreateDate)
 					})
 
-					e.SetTorrent(list[0])
-					found = append(found, e)
+					// Ищем лучший торрент, который еще не добавлен в текущую подборку
+					var bestTorr *models.TorrentDetails
+					for _, torrCand := range list {
+						if torrCand == nil {
+							continue
+						}
+						if torrCand.Hash != "" && seenTorrHash[torrCand.Hash] {
+							continue
+						}
+						cName := utils.ClearStr(torrCand.Name)
+						if cName != "" && seenTorrName[cName] {
+							continue
+						}
+						bestTorr = torrCand
+						break
+					}
+
+					if bestTorr != nil {
+						if bestTorr.Hash != "" {
+							seenTorrHash[bestTorr.Hash] = true
+						}
+						cName := utils.ClearStr(bestTorr.Name)
+						if cName != "" {
+							seenTorrName[cName] = true
+						}
+						e.SetTorrent(bestTorr)
+						found = append(found, e)
+					}
 				}
 				log.Println("Fill coll:", coll.Title, i+1, "/", len(ents))
 			}
@@ -156,13 +237,16 @@ func GetCollections() {
 						imgfn = ""
 					}
 					collId.PosterPath = strings.ReplaceAll(filepath.ToSlash(imgfn), "public", "")
+					if backdrop != "" {
+						collId.BackdropPath = cleanTmdbImgPath(backdrop)
+					}
 				}
 			}
 		}
 
 		fmt.Println()
-		// Polite delay between collections to avoid exceeding rate limits (15 RPM for Gemini, 30 RPM for Groq)
-		time.Sleep(2 * time.Second)
+		// Polite delay between collections to avoid exceeding rate limits (8000 TPM on Groq Free)
+		time.Sleep(5 * time.Second)
 	}
 
 	ml.SaveConfig()
@@ -212,6 +296,180 @@ func GetCollections() {
 	utils.FreeOSMemGC()
 }
 
+func searchTorrForEntity(e *models.Entity) []*models.TorrentDetails {
+	trySearch := func(q string) []*models.TorrentDetails {
+		q = strings.TrimSpace(q)
+		if q == "" {
+			return nil
+		}
+		return db.SearchTorr(q)
+	}
+
+	cleanRu := strings.ReplaceAll(e.Title, "ё", "е")
+	cleanRu = strings.ReplaceAll(cleanRu, "Ё", "Е")
+
+	// 1. Русское название + год
+	if list := trySearch(cleanRu + " " + e.Year); len(list) > 0 {
+		return list
+	}
+	if cleanRu != e.Title {
+		if list := trySearch(e.Title + " " + e.Year); len(list) > 0 {
+			return list
+		}
+	}
+
+	// 2. Оригинальное название + год (если отличается)
+	if e.OriginalTitle != "" && e.OriginalTitle != e.Title {
+		if list := trySearch(e.OriginalTitle + " " + e.Year); len(list) > 0 {
+			return list
+		}
+	}
+
+	// 3. Дополнительные английские / альтернативные названия + год
+	for _, name := range getEnNames(e.Titles) {
+		if name != "" && name != e.Title && name != e.OriginalTitle {
+			if list := trySearch(name + " " + e.Year); len(list) > 0 {
+				return list
+			}
+		}
+	}
+
+	// 4. Русское + оригинальное название + год (полная связка)
+	if e.OriginalTitle != "" && e.OriginalTitle != e.Title {
+		if list := trySearch(cleanRu + " " + e.OriginalTitle + " " + e.Year); len(list) > 0 {
+			return list
+		}
+	}
+
+	// 5. Только русское название (с фильтром по году +/- 1 год)
+	if list := trySearch(cleanRu); len(list) > 0 {
+		y, _ := strconv.Atoi(e.Year)
+		var matched []*models.TorrentDetails
+		for _, t := range list {
+			if y == 0 || t.Year == 0 || utils.Abs(t.Year-y) <= 1 {
+				matched = append(matched, t)
+			}
+		}
+		if len(matched) > 0 {
+			return matched
+		}
+	}
+
+	// 6. Только оригинальное название (с фильтром по году +/- 1 год)
+	if e.OriginalTitle != "" && e.OriginalTitle != e.Title {
+		if list := trySearch(e.OriginalTitle); len(list) > 0 {
+			y, _ := strconv.Atoi(e.Year)
+			var matched []*models.TorrentDetails
+			for _, t := range list {
+				if y == 0 || t.Year == 0 || utils.Abs(t.Year-y) <= 1 {
+					matched = append(matched, t)
+				}
+			}
+			if len(matched) > 0 {
+				return matched
+			}
+		}
+	}
+
+	return nil
+}
+
+func cleanTmdbImgPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	if idx := strings.LastIndex(path, "/"); idx != -1 {
+		return path[idx:]
+	}
+	return "/" + path
+}
+
+func enrichWithImdb(e *models.Entity) {
+	if e == nil {
+		return
+	}
+	cfg := config.GetImdbConfig()
+	if !cfg.Enabled {
+		return
+	}
+	if e.ImdbID == "" {
+		fullEnt := tmdb.GetVideoDetails(true, e.ID)
+		if fullEnt != nil && fullEnt.ImdbID != "" {
+			e.ImdbID = fullEnt.ImdbID
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.TimeoutSec)*time.Second)
+	defer cancel()
+	imdb.EnrichEntity(ctx, e)
+}
+
+// GetEffectiveRating returns the active rating, vote count, and data source ("imdb" or "tmdb").
+func GetEffectiveRating(e *models.Entity) (float64, int, string) {
+	if e == nil {
+		return 0, 0, "none"
+	}
+	cfg := config.GetImdbConfig()
+	if cfg.Enabled && cfg.PreferImdbRating && e.ImdbRating > 0 {
+		return e.ImdbRating, e.ImdbVotes, "IMDb"
+	}
+	if e.VoteAverage > 0 || e.VoteCount > 0 {
+		return e.VoteAverage, e.VoteCount, "TMDB"
+	}
+	if e.ImdbRating > 0 {
+		return e.ImdbRating, e.ImdbVotes, "IMDb"
+	}
+	return 0, 0, "none"
+}
+
+// isEntityEligibleForCollection determines if an entity satisfies rating requirements,
+// granting a grace period for newly released/in-theater movies or unrated materials.
+func isEntityEligibleForCollection(e *models.Entity, relCfg config.ReleasesConfig) (bool, string) {
+	if e == nil {
+		return false, "nil entity"
+	}
+
+	if relCfg.CollsMinRating <= 0 {
+		return true, "filter disabled"
+	}
+
+	rating, votes, source := GetEffectiveRating(e)
+
+	// 1. Удовлетворяет порогу рейтинга
+	if rating >= relCfg.CollsMinRating {
+		return true, fmt.Sprintf("%s %.1f >= %.1f", source, rating, relCfg.CollsMinRating)
+	}
+
+	// 2. Проверка льготы для новинок проката и фильмов без устоявшихся оценок
+	relDate := GetMovieDate(e)
+	freshMonths := relCfg.CollsFreshMonths
+	if freshMonths <= 0 {
+		freshMonths = 18
+	}
+	cutoffDate := time.Now().AddDate(0, -freshMonths, 0)
+	isFresh := relDate.IsZero() || relDate.After(cutoffDate)
+
+	// А) Фильм только вышел и оценок еще нет (VoteCount == 0 или rating == 0)
+	if isFresh && (votes == 0 || rating == 0) {
+		dateStr := "нет даты"
+		if !relDate.IsZero() {
+			dateStr = relDate.Format("02.01.2006")
+		}
+		return true, fmt.Sprintf("новинка проката без оценок (%s)", dateStr)
+	}
+
+	// Б) Фильм вышел недавно и количество оценок статистически мало (< colls_min_votes)
+	minVotes := relCfg.CollsMinVotes
+	if minVotes <= 0 {
+		minVotes = 30
+	}
+	if isFresh && votes < minVotes {
+		return true, fmt.Sprintf("новинка проката с малым числом оценок (%d < %d)", votes, minVotes)
+	}
+
+	// Фильм старый или имеет достаточное число оценок, подтверждающих низкий рейтинг
+	return false, fmt.Sprintf("%s %.1f (%d оценок) < %.1f", source, rating, votes, relCfg.CollsMinRating)
+}
+
 func getCollectionId(coll *ml.Collection, ents []*models.Entity) *CollectionId {
 	rid := &CollectionId{
 		Name:         coll.Title,
@@ -221,9 +479,56 @@ func getCollectionId(coll *ml.Collection, ents []*models.Entity) *CollectionId {
 		BackdropPath: "",
 	}
 
+	relCfg := config.GetReleasesConfig()
+	seenID := make(map[int64]bool)
+	seenHash := make(map[string]bool)
+	seenTitle := make(map[string]bool)
+	seenTorrName := make(map[string]bool)
 	rutorHost := config.RutorHost()
+
 	for _, e := range ents {
 		if e != nil && e.GetTorrent() != nil {
+			if eligible, reason := isEntityEligibleForCollection(e, relCfg); !eligible {
+				log.Printf("[Collection %q] Skipping %q (%v): %s\n", coll.Title, e.Title, e.Year, reason)
+				continue
+			}
+
+			d := e.GetTorrent()
+
+			// Строгая многоуровневая дедупликация: исключаем повторение фильма по TMDB ID,
+			// названию (рус/ориг), хэшу торрента и названию раздачи.
+			if seenID[e.ID] {
+				continue
+			}
+			if d.Hash != "" && seenHash[d.Hash] {
+				continue
+			}
+			cleanT := utils.ClearStr(e.Title)
+			if cleanT != "" && seenTitle[cleanT] {
+				continue
+			}
+			cleanOrig := utils.ClearStr(e.OriginalTitle)
+			if cleanOrig != "" && seenTitle[cleanOrig] {
+				continue
+			}
+			cleanTorr := utils.ClearStr(d.Name)
+			if cleanTorr != "" && seenTorrName[cleanTorr] {
+				continue
+			}
+
+			seenID[e.ID] = true
+			if d.Hash != "" {
+				seenHash[d.Hash] = true
+			}
+			if cleanT != "" {
+				seenTitle[cleanT] = true
+			}
+			if cleanOrig != "" {
+				seenTitle[cleanOrig] = true
+			}
+			if cleanTorr != "" {
+				seenTorrName[cleanTorr] = true
+			}
 			var countries []string
 			if len(e.ProductionCountries) > 0 {
 				for _, c := range e.ProductionCountries {
@@ -232,7 +537,6 @@ func getCollectionId(coll *ml.Collection, ents []*models.Entity) *CollectionId {
 			} else {
 				countries = e.OriginCountry
 			}
-			d := e.GetTorrent()
 			t := Torrent{
 				Name:     d.Name,
 				Date:     d.CreateDate.Format("02.01.2006"),
@@ -246,14 +550,20 @@ func getCollectionId(coll *ml.Collection, ents []*models.Entity) *CollectionId {
 				Voice:    d.AudioQuality,
 			}
 			tid := &TmdbId{
-				Id:          e.ID,
-				MediaType:   e.MediaType,
-				GenreIds:    e.GenresIds,
-				VoteAverage: e.VoteAverage,
-				VoteCount:   e.VoteCount,
-				Countries:   countries,
-				ReleaseDate: e.ReleaseDate,
-				Torrent:     []*Torrent{&t},
+				Id:           e.ID,
+				MediaType:    e.MediaType,
+				Title:        e.Title,
+				PosterPath:   cleanTmdbImgPath(e.PosterPath),
+				BackdropPath: cleanTmdbImgPath(e.BackdropPath),
+				GenreIds:     e.GenresIds,
+				VoteAverage:  e.VoteAverage,
+				VoteCount:    e.VoteCount,
+				ImdbRating:   e.ImdbRating,
+				ImdbVotes:    e.ImdbVotes,
+				ImdbID:       e.ImdbID,
+				Countries:    countries,
+				ReleaseDate:  e.ReleaseDate,
+				Torrent:      []*Torrent{&t},
 			}
 			rid.Parts = append(rid.Parts, tid)
 		}
@@ -278,8 +588,51 @@ func getCollectionId(coll *ml.Collection, ents []*models.Entity) *CollectionId {
 }
 
 func findTmdbMlMovie(movie *ml.MovieInfo) *models.Entity {
-	list := tmdb.Search(true, movie.Title)
+	if movie == nil || strings.TrimSpace(movie.Title) == "" {
+		return nil
+	}
+
+	cacheKey := strings.ToLower(strings.TrimSpace(movie.Title)) + ":" + strings.TrimSpace(movie.Year)
+	if val, ok := tmdbSearchCache.Load(cacheKey); ok {
+		if val == nil {
+			return nil
+		}
+		return val.(*models.Entity)
+	}
+
+	saveAndReturn := func(res *models.Entity) *models.Entity {
+		tmdbSearchCache.Store(cacheKey, res)
+		return res
+	}
+
 	yearml, _ := strconv.Atoi(movie.Year)
+
+	searchTMDB := func(query string) []*models.Entity {
+		query = strings.TrimSpace(query)
+		if query == "" {
+			return nil
+		}
+		res := tmdb.Search(true, query)
+		if len(res) == 0 {
+			cleanRu := strings.ReplaceAll(query, "ё", "е")
+			cleanRu = strings.ReplaceAll(cleanRu, "Ё", "Е")
+			if cleanRu != query {
+				res = tmdb.Search(true, cleanRu)
+			}
+		}
+		return res
+	}
+
+	rawTitle := movie.Title
+	list := searchTMDB(rawTitle)
+	if len(list) == 0 && strings.Contains(rawTitle, "/") {
+		parts := strings.Split(rawTitle, "/")
+		for _, p := range parts {
+			if list = searchTMDB(p); len(list) > 0 {
+				break
+			}
+		}
+	}
 
 	matchesYear := func(e *models.Entity) bool {
 		y := tmdb.GetEntityYear(e)
@@ -293,36 +646,36 @@ func findTmdbMlMovie(movie *ml.MovieInfo) *models.Entity {
 		return !matchesYear(e)
 	})
 
-	if len(list) == 1 {
-		return list[0]
-	}
-
 	list = utils.Distinct(list, func(e *models.Entity) string {
 		return strconv.FormatInt(e.ID, 10)
 	})
 
+	if len(list) == 0 {
+		return saveAndReturn(nil)
+	}
 	if len(list) == 1 {
-		return list[0]
+		return saveAndReturn(list[0])
 	}
 
-	if len(list) > 0 {
-		list = utils.Filter(list, func(i int, e *models.Entity) bool {
-			return !matchesYear(e)
-		})
-
-		list = utils.Filter(list, func(i int, e *models.Entity) bool {
-			if utils.ClearStr(e.Title) == utils.ClearStr(e.OriginalTitle) &&
-				utils.ClearStr(movie.Title) == utils.ClearStr(e.Title) {
-				return false
-			} else if utils.ClearStr(e.OriginalTitle) == utils.ClearStr(movie.Title) ||
-				utils.ClearStr(e.Title) == utils.ClearStr(movie.Title) {
-				return false
-			}
-			return true
-		})
-		if len(list) == 1 {
-			return list[0]
+	// Если найдено несколько кандидатов, сортируем по соответствию года, совпадению названия и популярности
+	sort.Slice(list, func(i, j int) bool {
+		yI := tmdb.GetEntityYear(list[i])
+		yJ := tmdb.GetEntityYear(list[j])
+		exactYearI := (yI == yearml && yearml > 0)
+		exactYearJ := (yJ == yearml && yearml > 0)
+		if exactYearI != exactYearJ {
+			return exactYearI
 		}
-	}
-	return nil
+
+		cleanM := utils.ClearStr(movie.Title)
+		matchI := utils.ClearStr(list[i].Title) == cleanM || utils.ClearStr(list[i].OriginalTitle) == cleanM
+		matchJ := utils.ClearStr(list[j].Title) == cleanM || utils.ClearStr(list[j].OriginalTitle) == cleanM
+		if matchI != matchJ {
+			return matchI
+		}
+
+		return list[i].VoteCount > list[j].VoteCount
+	})
+
+	return saveAndReturn(list[0])
 }

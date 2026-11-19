@@ -63,10 +63,24 @@
                 <label class="settings-field">
                     <span>Модель Groq</span>
                     <select name="groqmodel">
-                        <option value="openai/gpt-oss-20b">openai/gpt-oss-20b (Быстрая, по умолчанию)</option>
-                        <option value="qwen/qwen3.8-27b">qwen/qwen3.8-27b (Отличный русский язык)</option>
-                        <option value="openai/gpt-oss-120b">openai/gpt-oss-120b (Большая умная модель)</option>
-                        <option value="allam-2-7b">allam-2-7b</option>
+                        <option value="qwen/qwen3.8-27b">qwen/qwen3.8-27b (Рекомендуется)</option>
+                        <option value="openai/gpt-oss-120b">openai/gpt-oss-120b (Большая)</option>
+                        <option value="openai/gpt-oss-20b">openai/gpt-oss-20b (Быстрая)</option>
+                    </select>
+                </label>
+
+                <label class="settings-field settings-field-wide">
+                    <span>OpenRouter API key (бесплатные модели на openrouter.ai)</span>
+                    <input name="openrouterkey" type="password" autocomplete="off" placeholder="sk-or-v1-...">
+                </label>
+
+                <label class="settings-field">
+                    <span>Модель OpenRouter</span>
+                    <select name="openroutermodel">
+                        <option value="google/gemma-4-31b-it:free">google/gemma-4-31b-it:free (Рекомендуется)</option>
+                        <option value="google/gemma-4-26b-a4b-it:free">google/gemma-4-26b-a4b-it:free (Быстрая)</option>
+                        <option value="nvidia/nemotron-3.5-lightning:free">nvidia/nemotron-3.5-lightning:free (Nemotron 3.5)</option>
+                        <option value="inclusionai/ling-3.2-flash:free">inclusionai/ling-3.2-flash:free (Ling 3.2)</option>
                     </select>
                 </label>
 
@@ -119,6 +133,54 @@
                     <span>Макс. возраст аниме (мес, 0 = без отсечения)</span>
                     <input name="anime_max_age_months" type="number" min="0" max="120" placeholder="6">
                 </label>
+
+                <div class="settings-field-wide" style="margin-top: 15px; margin-bottom: 5px; border-top: 1px solid #444; padding-top: 15px;">
+                    <h3 style="color: #fff; margin: 0 0 10px 0; font-size: 1.1rem;">Фильтрация коллекций по рейтингу</h3>
+                </div>
+
+                <label class="settings-field">
+                    <span>Мин. рейтинг для коллекций (0.0 = без фильтра)</span>
+                    <input name="colls_min_rating" type="number" step="0.1" min="0" max="10" placeholder="6.0">
+                </label>
+
+                <label class="settings-field">
+                    <span>Мин. оценок для строгого учета (порог новинки)</span>
+                    <input name="colls_min_votes" type="number" min="0" max="100000" placeholder="30">
+                </label>
+
+                <label class="settings-field">
+                    <span>Срок новинки проката (мес, льгота новинок)</span>
+                    <input name="colls_fresh_months" type="number" min="0" max="120" placeholder="18">
+                </label>
+
+                <div class="settings-field-wide" style="margin-top: 15px; margin-bottom: 5px; border-top: 1px solid #444; padding-top: 15px;">
+                    <h3 style="color: #fff; margin: 0 0 10px 0; font-size: 1.1rem;">Локальная база IMDb (tribalRu/imdb-db)</h3>
+                </div>
+
+                <label class="settings-check settings-field-wide">
+                    <input name="imdb_enabled" type="checkbox">
+                    <span>Включить использование локальной базы IMDb (более объективные оценки и метаданные)</span>
+                </label>
+
+                <label class="settings-field">
+                    <span>URL сервиса imdb-db</span>
+                    <input name="imdb_host" type="text" placeholder="http://192.168.1.73:8000">
+                </label>
+
+                <label class="settings-field">
+                    <span>Секретный токен Bearer (если настроен)</span>
+                    <input name="imdb_token" type="password" autocomplete="off" placeholder="Оставьте пустым, если токен не нужен">
+                </label>
+
+                <label class="settings-check settings-field-wide">
+                    <input name="imdb_prefer_rating" type="checkbox">
+                    <span>Приоритет рейтинга IMDb перед TMDB (отображать и фильтровать по оценкам IMDb)</span>
+                </label>
+
+                <div class="settings-field-wide" style="display: flex; gap: 10px; align-items: center; margin-top: 5px;">
+                    <button type="button" class="secondary-button" id="btnTestImdb">Проверить подключение к IMDb</button>
+                    <span id="imdbStatus" style="font-size: 0.9rem;"></span>
+                </div>
 
                 <div class="settings-field-wide" style="margin-top: 15px; margin-bottom: 5px; border-top: 1px solid #444; padding-top: 15px;">
                     <h3 style="color: #fff; margin: 0 0 10px 0; font-size: 1.1rem;">Безопасность раздела настроек</h3>
@@ -174,7 +236,9 @@
         form.elements.tmdbtoken.value = settings.tmdbtoken || ''
         form.elements.aigkey.value = settings.aigkey || ''
         form.elements.groqkey.value = settings.groqkey || ''
-        form.elements.groqmodel.value = settings.groqmodel || 'openai/gpt-oss-20b'
+        form.elements.groqmodel.value = settings.groqmodel || 'llama-3.3-70b-versatile'
+        form.elements.openrouterkey.value = settings.openrouterkey || ''
+        form.elements.openroutermodel.value = settings.openroutermodel || 'google/gemini-2.0-flash-exp:free'
 
         const rel = settings.releases || {}
         form.elements.movie_sort.value = rel.movie_sort || 'release_date'
@@ -183,6 +247,15 @@
         form.elements.tv_max_age_months.value = (rel.tv_max_age_months !== undefined) ? rel.tv_max_age_months : 6
         form.elements.anime_sort.value = rel.anime_sort || 'last_air_date'
         form.elements.anime_max_age_months.value = (rel.anime_max_age_months !== undefined) ? rel.anime_max_age_months : 6
+        form.elements.colls_min_rating.value = (rel.colls_min_rating !== undefined) ? rel.colls_min_rating : 6.0
+        form.elements.colls_min_votes.value = (rel.colls_min_votes !== undefined) ? rel.colls_min_votes : 30
+        form.elements.colls_fresh_months.value = (rel.colls_fresh_months !== undefined) ? rel.colls_fresh_months : 18
+
+        const imdbCfg = settings.imdb || {}
+        form.elements.imdb_enabled.checked = (imdbCfg.enabled !== undefined) ? Boolean(imdbCfg.enabled) : true
+        form.elements.imdb_host.value = imdbCfg.host || 'http://192.168.1.73:8000'
+        form.elements.imdb_token.value = imdbCfg.token || ''
+        form.elements.imdb_prefer_rating.checked = (imdbCfg.prefer_imdb_rating !== undefined) ? Boolean(imdbCfg.prefer_imdb_rating) : true
 
         const sec = settings.security || {}
         form.elements.enable_settings.checked = (sec.enable_settings !== undefined) ? Boolean(sec.enable_settings) : true
@@ -209,13 +282,24 @@
             aigkey: form.elements.aigkey.value.trim(),
             groqkey: form.elements.groqkey.value.trim(),
             groqmodel: form.elements.groqmodel.value.trim(),
+            openrouterkey: form.elements.openrouterkey.value.trim(),
+            openroutermodel: form.elements.openroutermodel.value.trim(),
             releases: {
                 movie_sort: form.elements.movie_sort.value,
                 movie_max_age_months: parseInt(form.elements.movie_max_age_months.value, 10) || 0,
                 tv_sort: form.elements.tv_sort.value,
                 tv_max_age_months: parseInt(form.elements.tv_max_age_months.value, 10) || 0,
                 anime_sort: form.elements.anime_sort.value,
-                anime_max_age_months: parseInt(form.elements.anime_max_age_months.value, 10) || 0
+                anime_max_age_months: parseInt(form.elements.anime_max_age_months.value, 10) || 0,
+                colls_min_rating: parseFloat(form.elements.colls_min_rating.value) || 0.0,
+                colls_min_votes: parseInt(form.elements.colls_min_votes.value, 10) || 0,
+                colls_fresh_months: parseInt(form.elements.colls_fresh_months.value, 10) || 0
+            },
+            imdb: {
+                enabled: form.elements.imdb_enabled.checked,
+                host: form.elements.imdb_host.value.trim(),
+                token: form.elements.imdb_token.value.trim(),
+                prefer_imdb_rating: form.elements.imdb_prefer_rating.checked
             },
             security: {
                 enable_settings: form.elements.enable_settings.checked,
@@ -286,18 +370,47 @@
                     headers: { 'X-Access-Key': accessKeyParam }
                 })
                 const data = await response.json()
-                if (response.ok) {
+                if (response.status === 409 || data.status === 'busy') {
+                    genCollsStatus.style.color = '#ffa726'
+                    genCollsStatus.textContent = data.message || 'Генерация уже выполняется в фоновом режиме.'
+                } else if (response.ok) {
                     genCollsStatus.style.color = '#4caf50'
-                    genCollsStatus.textContent = 'Генерация запущена! Следите за логами сервера.'
+                    genCollsStatus.textContent = data.message || 'Генерация запущена! Следите за логами сервера.'
                 } else {
                     genCollsStatus.style.color = '#f44336'
-                    genCollsStatus.textContent = data.error || 'Ошибка запуска'
+                    genCollsStatus.textContent = data.message || data.error || 'Ошибка запуска'
                 }
             } catch (err) {
                 genCollsStatus.style.color = '#f44336'
                 genCollsStatus.textContent = 'Ошибка сети: ' + err.message
             } finally {
                 setTimeout(() => { btnGenColls.disabled = false }, 5000)
+            }
+        })
+    }
+
+    const btnTestImdb = document.getElementById('btnTestImdb')
+    const imdbStatus = document.getElementById('imdbStatus')
+    if (btnTestImdb && imdbStatus) {
+        btnTestImdb.addEventListener('click', async function() {
+            btnTestImdb.disabled = true
+            imdbStatus.style.color = '#bbb'
+            imdbStatus.textContent = 'Проверка...'
+            try {
+                const response = await fetch(apiUrl('/api/imdb/test'))
+                const data = await response.json()
+                if (data.status === 'ok') {
+                    imdbStatus.style.color = '#4caf50'
+                    imdbStatus.textContent = data.message || 'Соединение успешно!'
+                } else {
+                    imdbStatus.style.color = '#f44336'
+                    imdbStatus.textContent = data.message || 'Ошибка соединения'
+                }
+            } catch (err) {
+                imdbStatus.style.color = '#f44336'
+                imdbStatus.textContent = 'Ошибка сети: ' + err.message
+            } finally {
+                btnTestImdb.disabled = false
             }
         })
     }

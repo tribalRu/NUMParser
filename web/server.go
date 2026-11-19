@@ -3,13 +3,17 @@ package web
 import (
 	"NUMParser/config"
 	"NUMParser/db"
+	"NUMParser/db/imdb"
 	"NUMParser/ml"
 	"NUMParser/releases"
+	"NUMParser/utils"
 	"context"
 	"embed"
+	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -99,13 +103,38 @@ func setupRouter() *gin.Engine {
 	})
 
 	settingsGroup.POST("/api/collections/generate", func(c *gin.Context) {
+		if releases.IsGenerating() {
+			c.JSON(http.StatusConflict, gin.H{
+				"status":  "busy",
+				"message": "Генерация коллекций уже выполняется в фоновом режиме",
+			})
+			return
+		}
 		go func() {
 			releases.GetCollections()
 			db.SaveAll()
+			utils.CopySH()
 		}()
 		c.JSON(http.StatusOK, gin.H{
 			"status":  "started",
 			"message": "Генерация коллекций запущена в фоновом режиме",
+		})
+	})
+
+	settingsGroup.GET("/api/imdb/test", func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		err := imdb.Ping(ctx)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"status":  "error",
+				"message": fmt.Sprintf("Ошибка связи с imdb-db: %v", err),
+			})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"status":  "ok",
+			"message": "Соединение с imdb-db успешно установлено!",
 		})
 	})
 

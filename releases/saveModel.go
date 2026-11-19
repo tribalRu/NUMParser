@@ -1,14 +1,20 @@
 package releases
 
 type TmdbId struct {
-	Id          int64      `json:"id,omitempty"`
-	MediaType   string     `json:"media_type,omitempty"`
-	Torrent     []*Torrent `json:"torrent,omitempty"`
-	GenreIds    []int      `json:"genre_ids,omitempty"`
-	VoteAverage float64    `json:"vote_average,omitempty"`
-	VoteCount   int        `json:"vote_count,omitempty"`
-	Countries   []string   `json:"countries,omitempty"`
-	ReleaseDate string     `json:"release_date,omitempty"`
+	Id           int64      `json:"id,omitempty"`
+	MediaType    string     `json:"media_type,omitempty"`
+	Title        string     `json:"title,omitempty"`
+	PosterPath   string     `json:"poster_path,omitempty"`
+	BackdropPath string     `json:"backdrop_path,omitempty"`
+	Torrent      []*Torrent `json:"torrent,omitempty"`
+	GenreIds     []int      `json:"genre_ids,omitempty"`
+	VoteAverage  float64    `json:"vote_average,omitempty"`
+	VoteCount    int        `json:"vote_count,omitempty"`
+	ImdbRating   float64    `json:"imdb_rating,omitempty"`
+	ImdbVotes    int        `json:"imdb_votes,omitempty"`
+	ImdbID       string     `json:"imdb_id,omitempty"`
+	Countries    []string   `json:"countries,omitempty"`
+	ReleaseDate  string     `json:"release_date,omitempty"`
 }
 
 type ReleasesID struct {

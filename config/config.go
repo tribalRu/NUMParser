@@ -21,12 +21,15 @@ var ProxyHost = ""
 var UseProxy = false
 
 type ReleasesConfig struct {
-	MovieSort         string `yaml:"movie_sort" json:"movie_sort" env:"RELEASES_MOVIE_SORT" env-default:"release_date"`
-	MovieMaxAgeMonths int    `yaml:"movie_max_age_months" json:"movie_max_age_months" env:"RELEASES_MOVIE_MAX_AGE_MONTHS" env-default:"6"`
-	TVSort            string `yaml:"tv_sort" json:"tv_sort" env:"RELEASES_TV_SORT" env-default:"last_air_date"`
-	TVMaxAgeMonths    int    `yaml:"tv_max_age_months" json:"tv_max_age_months" env:"RELEASES_TV_MAX_AGE_MONTHS" env-default:"6"`
-	AnimeSort         string `yaml:"anime_sort" json:"anime_sort" env:"RELEASES_ANIME_SORT" env-default:"last_air_date"`
-	AnimeMaxAgeMonths int    `yaml:"anime_max_age_months" json:"anime_max_age_months" env:"RELEASES_ANIME_MAX_AGE_MONTHS" env-default:"6"`
+	MovieSort         string  `yaml:"movie_sort" json:"movie_sort" env:"RELEASES_MOVIE_SORT" env-default:"release_date"`
+	MovieMaxAgeMonths int     `yaml:"movie_max_age_months" json:"movie_max_age_months" env:"RELEASES_MOVIE_MAX_AGE_MONTHS" env-default:"6"`
+	TVSort            string  `yaml:"tv_sort" json:"tv_sort" env:"RELEASES_TV_SORT" env-default:"last_air_date"`
+	TVMaxAgeMonths    int     `yaml:"tv_max_age_months" json:"tv_max_age_months" env:"RELEASES_TV_MAX_AGE_MONTHS" env-default:"6"`
+	AnimeSort         string  `yaml:"anime_sort" json:"anime_sort" env:"RELEASES_ANIME_SORT" env-default:"last_air_date"`
+	AnimeMaxAgeMonths int     `yaml:"anime_max_age_months" json:"anime_max_age_months" env:"RELEASES_ANIME_MAX_AGE_MONTHS" env-default:"6"`
+	CollsMinRating    float64 `yaml:"colls_min_rating" json:"colls_min_rating" env:"RELEASES_COLLS_MIN_RATING" env-default:"6.0"`
+	CollsMinVotes     int     `yaml:"colls_min_votes" json:"colls_min_votes" env:"RELEASES_COLLS_MIN_VOTES" env-default:"30"`
+	CollsFreshMonths  int     `yaml:"colls_fresh_months" json:"colls_fresh_months" env:"RELEASES_COLLS_FRESH_MONTHS" env-default:"18"`
 }
 
 type SecurityConfig struct {
@@ -35,17 +38,28 @@ type SecurityConfig struct {
 	AccessKey      string `yaml:"access_key" json:"access_key" env:"SECURITY_ACCESS_KEY" env-default:""`
 }
 
+type ImdbConfig struct {
+	Enabled          bool   `yaml:"enabled" json:"enabled" env:"IMDB_ENABLED" env-default:"true"`
+	Host             string `yaml:"host" json:"host" env:"IMDB_HOST" env-default:"http://192.168.1.73:8000"`
+	Token            string `yaml:"token" json:"token" env:"IMDB_TOKEN" env-default:""`
+	TimeoutSec       int    `yaml:"timeout_sec" json:"timeout_sec" env:"IMDB_TIMEOUT_SEC" env-default:"5"`
+	PreferImdbRating bool   `yaml:"prefer_imdb_rating" json:"prefer_imdb_rating" env:"IMDB_PREFER_RATING" env-default:"true"`
+}
+
 type ConfigParser struct {
-	Host      string         `yaml:"host" json:"host" env:"HOST_RUTOR" env-default:"http://rutor.info"`
-	Port      string         `yaml:"port" json:"port" env:"PORT_RUTOR" env-default:"38888"`
-	UseProxy  bool           `yaml:"useproxy" json:"useproxy" env:"USEPROXY_RUTOR" env-default:"false"`
-	Proxy     string         `yaml:"proxy" json:"proxy" env:"PROXY_RUTOR" env-default:""`
-	TmdbToken string         `yaml:"tmdbtoken" json:"tmdbtoken"`
-	AigKey    string         `yaml:"aigkey" json:"aigkey"`
-	GroqKey   string         `yaml:"groqkey" json:"groqkey" env:"GROQ_KEY" env-default:""`
-	GroqModel string         `yaml:"groqmodel" json:"groqmodel" env:"GROQ_MODEL" env-default:"openai/gpt-oss-20b"`
-	Releases  ReleasesConfig `yaml:"releases" json:"releases"`
-	Security  SecurityConfig `yaml:"security" json:"security"`
+	Host            string         `yaml:"host" json:"host" env:"HOST_RUTOR" env-default:"http://rutor.info"`
+	Port            string         `yaml:"port" json:"port" env:"PORT_RUTOR" env-default:"38888"`
+	UseProxy        bool           `yaml:"useproxy" json:"useproxy" env:"USEPROXY_RUTOR" env-default:"false"`
+	Proxy           string         `yaml:"proxy" json:"proxy" env:"PROXY_RUTOR" env-default:""`
+	TmdbToken       string         `yaml:"tmdbtoken" json:"tmdbtoken"`
+	AigKey          string         `yaml:"aigkey" json:"aigkey"`
+	GroqKey         string         `yaml:"groqkey" json:"groqkey" env:"GROQ_KEY" env-default:""`
+	GroqModel       string         `yaml:"groqmodel" json:"groqmodel" env:"GROQ_MODEL" env-default:"qwen/qwen3.8-27b"`
+	OpenRouterKey   string         `yaml:"openrouterkey" json:"openrouterkey" env:"OPENROUTER_KEY" env-default:""`
+	OpenRouterModel string         `yaml:"openroutermodel" json:"openroutermodel" env:"OPENROUTER_MODEL" env-default:"google/gemma-4-31b-it:free"`
+	Releases        ReleasesConfig `yaml:"releases" json:"releases"`
+	Security        SecurityConfig `yaml:"security" json:"security"`
+	Imdb            ImdbConfig     `yaml:"imdb" json:"imdb"`
 }
 
 var (
@@ -57,7 +71,8 @@ func DefaultConfig() ConfigParser {
 	return ConfigParser{
 		Host:      "http://rutor.info",
 		Port:      "38888",
-		GroqModel: "openai/gpt-oss-20b",
+		GroqModel:       "qwen/qwen3.8-27b",
+		OpenRouterModel: "google/gemma-4-31b-it:free",
 		Releases: ReleasesConfig{
 			MovieSort:         "release_date",
 			MovieMaxAgeMonths: 6,
@@ -65,11 +80,21 @@ func DefaultConfig() ConfigParser {
 			TVMaxAgeMonths:    6,
 			AnimeSort:         "last_air_date",
 			AnimeMaxAgeMonths: 6,
+			CollsMinRating:    6.0,
+			CollsMinVotes:     30,
+			CollsFreshMonths:  18,
 		},
 		Security: SecurityConfig{
 			EnableSettings: true,
 			AdminPassword:  "",
 			AccessKey:      "",
+		},
+		Imdb: ImdbConfig{
+			Enabled:          true,
+			Host:             "http://192.168.1.73:8000",
+			Token:            "",
+			TimeoutSec:       5,
+			PreferImdbRating: true,
 		},
 	}
 }
@@ -149,8 +174,13 @@ func (c *ConfigParser) Normalize() {
 	c.AigKey = strings.TrimSpace(c.AigKey)
 	c.GroqKey = strings.TrimSpace(c.GroqKey)
 	c.GroqModel = strings.TrimSpace(c.GroqModel)
-	if c.GroqModel == "" || c.GroqModel == "llama-3.1-8b-instant" || c.GroqModel == "llama-3.3-70b-versatile" {
-		c.GroqModel = "openai/gpt-oss-20b"
+	c.OpenRouterKey = strings.TrimSpace(c.OpenRouterKey)
+	c.OpenRouterModel = strings.TrimSpace(c.OpenRouterModel)
+	if c.OpenRouterModel == "" || c.OpenRouterModel == "google/gemini-2.0-flash-exp:free" {
+		c.OpenRouterModel = "google/gemma-4-31b-it:free"
+	}
+	if c.GroqModel == "" || c.GroqModel == "llama-3.3-70b-versatile" || c.GroqModel == "allam-2-7b" {
+		c.GroqModel = "qwen/qwen3.8-27b"
 	}
 
 	if c.Host == "" {
@@ -192,6 +222,28 @@ func (c *ConfigParser) Normalize() {
 	}
 	if c.Releases.AnimeMaxAgeMonths < 0 {
 		c.Releases.AnimeMaxAgeMonths = 0
+	}
+	if c.Releases.CollsMinRating < 0 {
+		c.Releases.CollsMinRating = 0
+	}
+	if c.Releases.CollsMinRating > 10 {
+		c.Releases.CollsMinRating = 10
+	}
+	if c.Releases.CollsMinVotes < 0 {
+		c.Releases.CollsMinVotes = 0
+	}
+	if c.Releases.CollsFreshMonths < 0 {
+		c.Releases.CollsFreshMonths = 0
+	}
+
+	c.Imdb.Host = strings.TrimSpace(c.Imdb.Host)
+	c.Imdb.Host = strings.TrimRight(c.Imdb.Host, "/")
+	if c.Imdb.Host == "" {
+		c.Imdb.Host = "http://192.168.1.73:8000"
+	}
+	c.Imdb.Token = strings.TrimSpace(c.Imdb.Token)
+	if c.Imdb.TimeoutSec <= 0 {
+		c.Imdb.TimeoutSec = 5
 	}
 
 	c.Security.AdminPassword = strings.TrimSpace(c.Security.AdminPassword)
@@ -243,6 +295,10 @@ func GetSecurityConfig() SecurityConfig {
 	return GetConfig().Security
 }
 
+func GetImdbConfig() ImdbConfig {
+	return GetConfig().Imdb
+}
+
 func RutorHost() string {
 	c := GetConfig()
 	if c.Host == "" {
@@ -283,6 +339,16 @@ func ReadConfigParser(vars string) (string, error) {
 		return c.GroqKey, nil
 	case "GroqModel":
 		return c.GroqModel, nil
+	case "OpenRouterKey":
+		return c.OpenRouterKey, nil
+	case "OpenRouterModel":
+		return c.OpenRouterModel, nil
+	case "ImdbEnabled":
+		return strconv.FormatBool(c.Imdb.Enabled), nil
+	case "ImdbHost":
+		return c.Imdb.Host, nil
+	case "ImdbToken":
+		return c.Imdb.Token, nil
 	}
 	return "", nil
 }

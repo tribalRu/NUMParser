@@ -35,3 +35,14 @@ func TestExtractIDsFromHTMLEmpty(t *testing.T) {
 	}
 }
 
+func TestIsGeneratingFlag(t *testing.T) {
+	if IsGenerating() {
+		t.Errorf("expected IsGenerating to be false initially")
+	}
+	isGenerating.Store(true)
+	if !IsGenerating() {
+		t.Errorf("expected IsGenerating to be true")
+	}
+	isGenerating.Store(false)
+}
+

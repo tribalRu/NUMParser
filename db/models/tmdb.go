@@ -29,6 +29,9 @@ type Entity struct {
 	Video               bool                 `json:"video"`
 	VoteAverage         float64              `json:"vote_average"`
 	VoteCount           int                  `json:"vote_count"`
+	ImdbRating          float64              `json:"imdb_rating,omitempty"`
+	ImdbVotes           int                  `json:"imdb_votes,omitempty"`
+	RatingSource        string               `json:"rating_source,omitempty"`
 	Titles              []string             `json:"titles"`
 
 	// tv

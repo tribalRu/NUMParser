@@ -90,28 +90,30 @@ func initGroq() {
 		GroqModel = strings.TrimSpace(model)
 	}
 	// Migrate legacy/inaccessible model names
-	if GroqModel == "" || GroqModel == "llama-3.1-8b-instant" || GroqModel == "llama-3.3-70b-versatile" || GroqModel == "llama3-70b-8192" || GroqModel == "mixtral-8x7b-32768" {
-		GroqModel = "openai/gpt-oss-20b"
+	if GroqModel == "" || GroqModel == "llama-3.1-8b-instant" || GroqModel == "llama-3.3-70b-versatile" || GroqModel == "llama3-70b-8192" || GroqModel == "mixtral-8x7b-32768" || GroqModel == "allam-2-7b" {
+		GroqModel = "qwen/qwen3.8-27b"
 	}
 }
 
 func rankModel(id string) int {
 	lower := strings.ToLower(id)
 	switch {
-	case strings.Contains(lower, "gpt-oss-20b"):
-		return 1
 	case strings.Contains(lower, "qwen3.8-27b") || strings.Contains(lower, "qwen"):
-		return 2
+		return 1
 	case strings.Contains(lower, "gpt-oss-120b"):
+		return 2
+	case strings.Contains(lower, "gpt-oss-20b"):
 		return 3
-	case strings.Contains(lower, "llama-3.1-8b"):
-		return 10
 	case strings.Contains(lower, "llama-3.3-70b"):
-		return 11
-	case strings.Contains(lower, "llama"):
-		return 12
-	case strings.Contains(lower, "allam"):
-		return 20
+		return 4
+	case strings.Contains(lower, "llama-3.1-8b"):
+		return 5
+	case strings.Contains(lower, "gemma2-9b") || strings.Contains(lower, "gemma-2-9b"):
+		return 6
+	case strings.Contains(lower, "mixtral-8x7b"):
+		return 7
+	case strings.Contains(lower, "allam") || strings.Contains(lower, "whisper") || strings.Contains(lower, "guard"):
+		return 999
 	default:
 		return 15
 	}
@@ -162,7 +164,7 @@ func fetchGroqModels(ctx context.Context) ([]string, error) {
 	var ids []string
 	for _, m := range mResp.Data {
 		lower := strings.ToLower(m.ID)
-		if strings.Contains(lower, "whisper") || strings.Contains(lower, "guard") || strings.Contains(lower, "safeguard") {
+		if strings.Contains(lower, "whisper") || strings.Contains(lower, "guard") || strings.Contains(lower, "safeguard") || strings.Contains(lower, "allam") || strings.Contains(lower, "orpheus") || strings.Contains(lower, "canopylabs") {
 			continue
 		}
 		ids = append(ids, m.ID)
@@ -183,65 +185,62 @@ func CallGroq(ctx context.Context, systemPrompt, userPrompt string, jsonMode boo
 	}
 
 	modelToTry := GroqModel
+	if modelToTry == "" || modelToTry == "llama-3.3-70b-versatile" || modelToTry == "allam-2-7b" {
+		modelToTry = "qwen/qwen3.8-27b"
+	}
 	content, err := callGroqWithModel(ctx, modelToTry, systemPrompt, userPrompt, jsonMode)
 	if err == nil {
 		return content, nil
 	}
 
-	// Check if model returned 404 (model not found) or 429 (rate limit exceeded)
-	errMsg := err.Error()
-	isNotFound := strings.Contains(errMsg, "does not exist") || strings.Contains(errMsg, "do not have access") || strings.Contains(errMsg, "status 404")
-	isRateLimit := strings.Contains(errMsg, "status 429") || strings.Contains(errMsg, "Rate limit") || strings.Contains(errMsg, "rate_limit")
+	log.Printf("[Groq] Модель %q вернула ошибку (%v), пробуем другие модели аккаунта...", modelToTry, err)
 
-	if isNotFound || isRateLimit {
-		// 1. Query the actual list of models allowed for this key
-		verifiedModelsMu.Lock()
-		if len(verifiedModels) == 0 {
-			models, mErr := fetchGroqModels(ctx)
-			if mErr != nil {
-				log.Printf("[Groq] Не удалось запросить список доступных моделей с сервера Groq: %v\n", mErr)
-			} else {
-				log.Printf("[Groq] Доступные модели вашего аккаунта (по приоритету): %v\n", models)
-				verifiedModels = models
-			}
+	// 1. Query the actual list of models allowed for this key
+	verifiedModelsMu.Lock()
+	if len(verifiedModels) == 0 {
+		models, mErr := fetchGroqModels(ctx)
+		if mErr != nil {
+			log.Printf("[Groq] Не удалось запросить список доступных моделей с сервера Groq: %v\n", mErr)
+		} else {
+			log.Printf("[Groq] Доступные модели вашего аккаунта (по приоритету): %v\n", models)
+			verifiedModels = models
 		}
-		modelsToTry := make([]string, len(verifiedModels))
-		copy(modelsToTry, verifiedModels)
-		verifiedModelsMu.Unlock()
+	}
+	modelsToTry := make([]string, len(verifiedModels))
+	copy(modelsToTry, verifiedModels)
+	verifiedModelsMu.Unlock()
 
-		for _, m := range modelsToTry {
-			if m == modelToTry {
-				continue
-			}
-			log.Printf("[Groq] Пробуем доступную модель аккаунта %q...\n", m)
-			content, altErr := callGroqWithModel(ctx, m, systemPrompt, userPrompt, jsonMode)
-			if altErr == nil {
-				log.Printf("[Groq] Модель %q успешно ответила! Переключаем активную модель на %q\n", m, m)
-				GroqModel = m
-				return content, nil
-			}
+	for _, m := range modelsToTry {
+		if m == modelToTry {
+			continue
 		}
+		log.Printf("[Groq] Пробуем доступную модель аккаунта %q...\n", m)
+		altContent, altErr := callGroqWithModel(ctx, m, systemPrompt, userPrompt, jsonMode)
+		if altErr == nil {
+			log.Printf("[Groq] Модель %q успешно ответила! Переключаем активную модель на %q\n", m, m)
+			GroqModel = m
+			return altContent, nil
+		}
+	}
 
-		// 2. Fallback to static list of candidates
-		candidates := []string{
-			"openai/gpt-oss-20b",
-			"qwen/qwen3.8-27b",
-			"openai/gpt-oss-120b",
-			"allam-2-7b",
-			"llama-3.1-8b-instant",
-			"llama-3.3-70b-versatile",
+	// 2. Fallback to static list of candidates
+	candidates := []string{
+		"qwen/qwen3.8-27b",
+		"openai/gpt-oss-120b",
+		"openai/gpt-oss-20b",
+		"llama-3.3-70b-versatile",
+		"llama-3.1-8b-instant",
+	}
+	for _, altModel := range candidates {
+		if altModel == modelToTry {
+			continue
 		}
-		for _, altModel := range candidates {
-			if altModel == modelToTry {
-				continue
-			}
-			log.Printf("[Groq] Пробуем резервную модель %q...\n", altModel)
-			content, altErr := callGroqWithModel(ctx, altModel, systemPrompt, userPrompt, jsonMode)
-			if altErr == nil {
-				log.Printf("[Groq] Резервная модель %q успешно ответила! Переключаем активную модель на %q\n", altModel, altModel)
-				GroqModel = altModel
-				return content, nil
-			}
+		log.Printf("[Groq] Пробуем резервную модель %q...\n", altModel)
+		altContent, altErr := callGroqWithModel(ctx, altModel, systemPrompt, userPrompt, jsonMode)
+		if altErr == nil {
+			log.Printf("[Groq] Резервная модель %q успешно ответила! Переключаем активную модель на %q\n", altModel, altModel)
+			GroqModel = altModel
+			return altContent, nil
 		}
 	}
 
@@ -318,8 +317,8 @@ func callGroqWithModel(ctx context.Context, model string, systemPrompt, userProm
 			errMsg = gErr.Error.Message
 		}
 
-		// If jsonMode failed due to unsupported response_format, retry without response_format
-		if jsonMode && (strings.Contains(errMsg, "response_format") || strings.Contains(errMsg, "json_object")) {
+		// If jsonMode failed due to unsupported response_format or 400 Bad Request, retry without response_format
+		if jsonMode && (resp.StatusCode == http.StatusBadRequest || strings.Contains(errMsg, "response_format") || strings.Contains(errMsg, "json_object")) {
 			log.Printf("[Groq] Модель %s не поддерживает response_format json_object, повторяем без него...", model)
 			return callGroqWithModel(ctx, model, systemPrompt, userPrompt, false)
 		}
