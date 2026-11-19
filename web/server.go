@@ -123,6 +123,19 @@ func setupRouter() *gin.Engine {
 		})
 	})
 
+	settingsGroup.POST("/api/releases/generate", func(c *gin.Context) {
+		go func() {
+			releases.GenerateAllReleases()
+			releases.GetLegends()
+			db.SaveAll()
+			utils.CopySH()
+		}()
+		c.JSON(http.StatusOK, gin.H{
+			"status":  "started",
+			"message": "Пересборка всех категорий релизов (фильмы, 4K, сериалы, мультфильмы, аниме, легенды) запущена в фоновом режиме",
+		})
+	})
+
 	settingsGroup.GET("/api/imdb/test", func(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

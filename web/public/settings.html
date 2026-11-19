@@ -153,6 +153,13 @@
                     <input name="fresh_months" type="number" min="0" max="120" placeholder="18">
                 </label>
 
+                <div class="settings-field settings-field-wide" style="display: flex; align-items: center; gap: 15px; margin-top: 10px; margin-bottom: 5px;">
+                    <button type="button" id="btnGenReleases" class="settings-button" style="background: #2e7d32; border: none; padding: 10px 18px; border-radius: 4px; color: #fff; cursor: pointer; font-size: 0.95rem; font-weight: 600;">
+                        🚀 Пересобрать все категории релизов прямо сейчас
+                    </button>
+                    <span id="genReleasesStatus" style="font-size: 0.9rem; color: #bbb;"></span>
+                </div>
+
                 <div class="settings-field-wide" style="margin-top: 15px; margin-bottom: 5px; border-top: 1px solid #444; padding-top: 15px;">
                     <h3 style="color: #fff; margin: 0 0 10px 0; font-size: 1.1rem;">Локальная база IMDb (tribalRu/imdb-db)</h3>
                 </div>
@@ -391,6 +398,35 @@
                 genCollsStatus.textContent = 'Ошибка сети: ' + err.message
             } finally {
                 setTimeout(() => { btnGenColls.disabled = false }, 5000)
+            }
+        })
+    }
+
+    const btnGenReleases = document.getElementById('btnGenReleases')
+    const genReleasesStatus = document.getElementById('genReleasesStatus')
+    if (btnGenReleases && genReleasesStatus) {
+        btnGenReleases.addEventListener('click', async function() {
+            btnGenReleases.disabled = true
+            genReleasesStatus.style.color = '#bbb'
+            genReleasesStatus.textContent = 'Запуск пересборки всех категорий...'
+            try {
+                const response = await fetch(apiUrl('/api/releases/generate'), {
+                    method: 'POST',
+                    headers: { 'X-Access-Key': accessKeyParam }
+                })
+                const data = await response.json()
+                if (response.ok) {
+                    genReleasesStatus.style.color = '#4caf50'
+                    genReleasesStatus.textContent = data.message || 'Пересборка запущена! Фильмы, 4K, сериалы, мультфильмы, аниме пересобираются в фоне.'
+                } else {
+                    genReleasesStatus.style.color = '#f44336'
+                    genReleasesStatus.textContent = data.message || data.error || 'Ошибка запуска'
+                }
+            } catch (err) {
+                genReleasesStatus.style.color = '#f44336'
+                genReleasesStatus.textContent = 'Ошибка сети: ' + err.message
+            } finally {
+                setTimeout(() => { btnGenReleases.disabled = false }, 5000)
             }
         })
     }

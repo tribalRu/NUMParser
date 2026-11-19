@@ -48,9 +48,13 @@ func save(fname string, ents []*models.Entity) {
 				countries = e.OriginCountry
 			}
 			d := e.GetTorrent()
+			torrDate := d.CreateDate
+			if torrDate.Year() < 1970 || torrDate.Year() > 2100 {
+				torrDate = time.Now()
+			}
 			t := Torrent{
 				Name:     d.Name,
-				Date:     d.CreateDate.Format("02.01.2006"),
+				Date:     torrDate.Format("02.01.2006"),
 				Magnet:   d.Magnet,
 				Size:     d.Size,
 				Upload:   strconv.Itoa(d.Seed),

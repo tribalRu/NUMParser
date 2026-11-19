@@ -34,17 +34,19 @@ import (
 )
 
 type args struct {
-	Port     string `arg:"-p" help:"web server port, default 38888"`
-	Proxy    string `arg:"--proxy" help:"proxy for rutor, http://user:password@ip:port"`
-	UseProxy bool   `arg:"--useproxy" help:"enable auto proxy"`
-	GenColls bool   `arg:"--gencolls" help:"force regenerate AI collections on startup"`
+	Port       string `arg:"-p" help:"web server port, default 38888"`
+	Proxy      string `arg:"--proxy" help:"proxy for rutor, http://user:password@ip:port"`
+	UseProxy   bool   `arg:"--useproxy" help:"enable auto proxy"`
+	GenColls   bool   `arg:"--gencolls" help:"force regenerate AI collections on startup"`
+	ForceYears bool   `arg:"--forceyears" help:"force regenerate all movie years (1980..now) on startup"`
 }
 
 var (
-	params             args
-	isScanningReleases atomic.Bool
-	isScanningYears    atomic.Bool
-	isScanningColls    atomic.Bool
+	params               args
+	isScanningReleases   atomic.Bool
+	isScanningYears      atomic.Bool
+	isScanningColls      atomic.Bool
+	isGeneratingReleases atomic.Bool
 )
 
 func main() {
@@ -131,6 +133,12 @@ func main() {
 
 	// Start initial background scanning so web UI is immediately responsive
 	go func() {
+		// 1. Immediately rebuild all 6 main categories + legends from local DB in 5-10 seconds!
+		// No waiting for Rutor crawler: valid release files are available on disk immediately.
+		rebuildReleasesNow()
+		utils.FreeOSMemGC()
+
+		// 2. Crawl Rutor tracker for fresh torrents in background
 		scanReleases()
 		utils.FreeOSMemGC()
 		scanMoviesYears()
@@ -203,6 +211,25 @@ func toolResolve(host string, serverDNS string) int {
 	return a
 }
 
+func rebuildReleasesNow() {
+	if isGeneratingReleases.Swap(true) {
+		log.Println("rebuildReleasesNow: already in progress, skipping duplicate run")
+		return
+	}
+	defer isGeneratingReleases.Store(false)
+
+	log.Println("==================================================")
+	log.Println("=== Immediate rebuild of all release categories ===")
+	log.Println("==================================================")
+	releases.GenerateAllReleases()
+	releases.GetLegends()
+	db.SaveAll()
+	copySH()
+	log.Println("==================================================")
+	log.Println("=== All categories successfully rebuilt on disk ===")
+	log.Println("==================================================")
+}
+
 func scanReleases() {
 	if isScanningReleases.Swap(true) {
 		log.Println("scanReleases: already in progress, skipping duplicate run")
@@ -219,12 +246,7 @@ func scanReleases() {
 		return
 	}
 
-	releases.GetNewMovies()
-	releases.GetFourKMovies()
-	releases.GetNewTVs()
-	releases.GetNewCartoons()
-	releases.GetNewCartoonsTV()
-	releases.GetNewAnime()
+	releases.GenerateAllReleases()
 	db.SaveAll()
 	copySH()
 }
@@ -247,7 +269,7 @@ func scanMoviesYears() {
 		if storage.IsStopping() {
 			return
 		}
-		if releases.ShouldScanYear(y, torrs) {
+		if params.ForceYears || releases.ShouldScanYear(y, torrs) {
 			yearsToScan = append(yearsToScan, y)
 		} else {
 			log.Printf("Movies %d: up to date, skipping", y)
